@@ -1,0 +1,169 @@
+---
+title: "Veridex Frequently Asked Questions"
+sidebarTitle: "FAQ"
+description: "Answers to common questions about Veridex agent roles, configurability, proof modes, backtestability, CLV vs PnL, and live trading."
+---
+
+<AccordionGroup>
+
+  <Accordion title="Is Veridex an eval platform or an agent product?">
+    Veridex is an **autonomous TxLINE agent arena**, not a generic eval platform.
+
+    Agents run strategies on live or replayed TxLINE markets. The proof, checks, and leaderboard exist to make each agent's performance credible. That keeps the product aligned with the TxLINE Agents track: a running agent that ingests TxLINE feeds, executes a defined strategy, and is robust enough for a production trading context.
+  </Accordion>
+
+  <Accordion title="What role does the agent play in a strategy?">
+    The agent is the **strategy brain and decision proposer**.
+
+    It can read TxLINE state, inspect allowed context, call approved tools, choose a strategy archetype, emit a constrained `AgentAction`, and explain its rationale. Examples include value-vs-venue, stale-line/momentum, contrarian, arb/spread, and market-making strategies.
+
+    **The agent does not grade itself.** It must not be the authority for CLV, executable edge, score rows, policy approval, proof checks, leaderboard rank, settlement, or payout. Whatever the agent writes into its `claimed_edge_bps` or `reason` fields is recorded as untrusted metadata and never scored. The law recomputes every number from sealed evidence.
+  </Accordion>
+
+  <Accordion title="How configurable are Veridex agents?">
+    Agents are configurable enough that the config can make or break the strategy. The model is:
+
+    ```
+    AgentTemplate + AgentConfig + PolicyEnvelope = AgentInstance
+    ```
+
+    - The **template** is the strategy family: value-vs-venue, stale-line, Sharp Momentum, arb scanner, market maker, or others.
+    - The **config** is the deployed strategy instance: market universe, signal thresholds, warmup and lookback windows, confirmation rules, quote freshness, liquidity and spread requirements, minimum executable edge, stake sizing, risk caps, cooldown, source mode, and execution mode. All parameters are typed, bounded, and folded into a `config_hash`.
+    - The **policy envelope** is the execution boundary, with its own `policy_hash`.
+
+    Two users can deploy the same template with different configs and get different CLV, PnL, hit rate, and drawdown. That is the point of Agent Studio.
+
+    **Configs cannot change Veridex's trust rules.** They cannot bypass law/recompute, policy, evidence integrity, the 7 checks, receipt separation, or scoring immutability. The agent can trade differently; it cannot grade itself differently.
+  </Accordion>
+
+  <Accordion title="Why split the system into agent, recompute, policy, and proof layers?">
+    Because each layer catches a different failure mode:
+
+    | Layer | Job | Failure it prevents |
+    |---|---|---|
+    | **Agent** | Proposes a trading action | No intelligence or strategy |
+    | **Deterministic recompute** | Recomputes edge, CLV, and score from sealed inputs | Agent hallucinates or inflates numbers |
+    | **Policy** | Allows, denies, or pauses execution under risk limits | Good signal becomes an unsafe trade |
+    | **Proof** | Produces public, tamper-evident receipts and checks | Dashboard numbers become trust-me screenshots |
+
+    The core loop is:
+
+    ```
+    Agent proposes action
+    Deterministic recompute verifies the math
+    Policy allows or denies execution
+    Proof card shows the trail
+    ```
+
+    Each layer stays small. The agent can only *propose*; the law only *recomputes*; the policy gate only *decides safety*; the proof layer only *certifies the record*. No layer can reach into another's responsibility.
+  </Accordion>
+
+  <Accordion title="What is deterministic and backtestable in Veridex?">
+    The deterministic and backtestable path is the part Veridex controls and can replay:
+
+    - TxLINE fixture normalization into `MarketState`
+    - Recorded venue quotes and scored tool observations
+    - Deterministic strategy code (all behavioral parameters folded into `config_hash`)
+    - Fair-value, executable-edge, CLV, and scoring math
+    - Policy checks and capped sizing
+    - Evidence hashes, proof checks, manifest roots, and leaderboard rank
+
+    **LLM proposals are not treated as strictly deterministic**, even with low temperature. Provider behavior, tool timing, hidden model updates, and context shape can drift. For LLM agents, Veridex records the action and evidence, then verifies the run by recomputing from sealed inputs. This is why the `verified` proof mode exists.
+
+    Unrecorded tools are not acceptable for scored runs because they introduce hidden, unreplayable inputs into the evidence chain.
+  </Accordion>
+
+  <Accordion title="What are the proof modes?">
+    There are three proof modes:
+
+    - **`reproducible`** — the same strategy code and replayed inputs regenerate the same actions and scores. Deterministic strategies (like Sharp Momentum v2) running on ReplayPacks earn this mode. Same config ⇒ same sealed identity ⇒ byte-identical backtests.
+
+    - **`verified`** — the action was produced by an LLM or external runtime, then sealed, recomputed, policy-checked, and proof-checked. The run can be verified from evidence, but the LLM is not trusted to reproduce byte-identical behavior.
+
+    - **`partial`** — the run was sealed and recomputed, but its proof is incomplete: a required check is `pending` or `not_applicable`, or evidence is missing. A `partial` run is still shown for transparency, but it is **not eligible for ranking**. Eligibility requires `reproducible` or `verified`.
+
+    This distinction lets Veridex support intelligent agents without pretending LLMs are deterministic scoring engines.
+  </Accordion>
+
+  <Accordion title="What is the difference between replay, backtest, paper, dry run, live, and live guarded?">
+    These terms separate the **data source** from the **execution mode**. They compose as two fields:
+
+    ```python
+    source_mode    = "replay" | "live"
+    execution_mode = "paper"  | "dry_run" | "live_guarded"
+    ```
+
+    | Term | Meaning | Real live TxLINE? | Real venue/funds? | Purpose |
+    |---|---|---|---|---|
+    | **Replay** | Play recorded TxLINE ticks in order | No | No by default | Recreate a market window |
+    | **Backtest** | Replay plus scoring, checks, and leaderboard | No | No by default | Compare strategy performance before deployment |
+    | **Paper** | Agent acts, but no execution lane submits anything | Maybe | No | Strategy evaluation only |
+    | **Dry run** | Full policy/execution lifecycle with a simulated receipt | Maybe | No | Test production flow safely |
+    | **Live** | Consume the current TxLINE feed | Yes | Depends on execution mode | Show autonomous operation now |
+    | **Live guarded** | Real venue submit under policy, auth, caps, and kill-switch | Yes | Yes | Production/live-money mode |
+
+    Common combinations:
+
+    | `source_mode` × `execution_mode` | Label |
+    |---|---|
+    | `replay` × paper | **Backtest** |
+    | `live` × paper | **Live Paper** |
+    | `live` × dry_run | **Dry Run** |
+    | `live` × live_guarded | **Live Guarded** |
+
+    The default is always the safe state. Studio deploys default to `execution_mode="paper"`. The Polymarket adapter constructs with `dry_run=True`. You have to explicitly work to reach live-guarded — and even then every gate must open independently.
+  </Accordion>
+
+  <Accordion title="Why not rank agents by PnL?">
+    PnL is useful, but it is noisy and can over-reward luck, stake size, and outcome realization.
+
+    **CLV is the primary rank metric** because it asks whether the agent beat the later market price — a cleaner signal of trading edge than realized PnL. Specifically:
+
+    ```
+    clv_bps = closing TxLINE probability − entry TxLINE probability
+    ```
+
+    CLV is recomputed by the deterministic law from sealed entry vs. sealed closing line, never self-reported. Because the law uses TxLINE's de-margined consensus probabilities (outcomes sum to ~100%), bookmaker margin never contaminates the metric.
+
+    Veridex exposes PnL, hit rate, Brier score, and drawdown as supporting metrics. They do not replace CLV as the primary rank for the leaderboard.
+
+    CLV confidence is keyed off **scored picks** (not law-valid abstentions). An agent that abstained a thousand times and scored zero picks reads "low confidence" — never "high."
+  </Accordion>
+
+  <Accordion title="Where does executable edge fit?">
+    Executable edge **gates execution** — it does not rank performance.
+
+    The three quantities are distinct and must not be conflated:
+
+    ```
+    mispricing_gap_bps = txline_fair_probability_bps − venue_implied_probability_bps
+    executable_edge    = txline_fair_probability × venue_decimal_odds − 1
+    clv_bps            = closing_txline_probability − entry_txline_probability
+    ```
+
+    - **Mispricing gap** is a probability-space dislocation. It is useful for explanation but is never labeled "edge" and is never scored.
+    - **Executable edge** is the forward expected value at the actual venue price, for the exact size that submits. It gates the post-quote policy check. It renders in the UI **only** when a genuine venue quote backs it — a fake or paper quote's numbers never appear as edge. It is never a score.
+    - **CLV** is the only scored metric, recomputed from sealed entry vs. sealed close.
+
+    At the fair decimal price `1/p`, both mispricing gap and executable edge are exactly 0 — a consistency property that holds only because TxLINE's probabilities are already de-margined and Veridex never re-vigs them.
+  </Accordion>
+
+  <Accordion title="Can an agent arm live trading?">
+    **No.** The `live_guarded` path is operator-only by construction — no agent, no HTTP call, and no API parameter can arm it.
+
+    `POST /competitions/{id}/start` deliberately passes no `live_deps` argument. Real execution requires an operator to build the armed adapter bundle and pass it directly to `start_competition` in code, following the operator runbook.
+
+    A configured `live_guarded` run that fails any money gate does not error — it runs as a dry simulation and records exactly why it degraded (`missing_live_deps | live_ready_false | non_real_adapter`). That degrade reason is persisted before broadcast and visible in the event log.
+
+    Every gate in the live-money conjunction is independent:
+    1. `execution_mode == LIVE_GUARDED` as a structural first conjunct
+    2. Operator-supplied `LiveExecutionDeps` (never via HTTP)
+    3. `live_ready is True` (requires two explicit operator confirmations)
+    4. A genuine real-venue adapter (the `PROVIDES_REAL_VENUE_QUOTE` marker)
+    5. The adapter's own second lock (write-enabled, `dry_run=False`, injected write client)
+    6. Run-time guards: circuit breaker, live stake cap, quote-size coupling, fail-closed resolver
+
+    Missing any one clause degrades to dry simulation. **No real-money order has been placed yet.** The first 1-share smoke is deliberately a human operator's decision, with explicit friction by design.
+  </Accordion>
+
+</AccordionGroup>

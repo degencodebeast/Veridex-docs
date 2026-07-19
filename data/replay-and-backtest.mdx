@@ -1,0 +1,89 @@
+---
+title: "Replay Packs and Backtesting in Veridex"
+sidebarTitle: "Replay & Backtest"
+description: "Use content-hashed ReplayPacks to reproduce any historical TxLINE fixture offline, score agents deterministically, and verify results with a sealed proof."
+---
+
+## What ReplayPacks are
+
+A **ReplayPack** is a content-hashed bundle of sealed TxLINE odds history for a specific fixture. It lets you run an agent offline in a fully deterministic, reproducible fashion — the same pack replayed through the same strategy code always produces the same sealed output, the same CLV scores, and the same verifiable proof.
+
+ReplayPacks are self-describing directories containing:
+- `pack.json` — the manifest with fixture metadata, closing policy, and the `content_hash`
+- `odds_<fid>.jsonl` — one raw native TxLINE record per line
+- Optional `updates_<fid>.json` — full fixture history from `GET /api/odds/updates/{fixtureId}`
+
+The pack verifies its own integrity on load: `load_pack_marketstates` recomputes the `content_hash` by default and **refuses to replay a tampered pack**.
+
+## How ReplayPacks are created
+
+You can create a ReplayPack two ways:
+
+**From a recorder session** — The capture recorder writes an append-only `records.jsonl` of enveloped raw records with receipt timestamps. It emits explicit `gap` lines for stream gaps (never a silent splice) and handles crash-safe reads (a truncated final line is dropped). `pack_from_session` is a pure file transform from the session directory into a valid ReplayPack.
+
+**From real TxLINE history** — A single call to `GET /api/odds/updates/{fixtureId}` retrieves the full odds movement history for a finished fixture. Veridex used this path to create the 18 content-hashed ReplayPacks that backed the World Cup real-data experiment.
+
+## The content hash
+
+The pack's `content_hash` is a SHA-256 over length-prefixed `(name, bytes)` pairs for each manifest-referenced data file in sorted-filename order. The hash scope equals the fixtures listed in the manifest exactly: a stale unreferenced file in the directory is excluded, and length-prefixing makes the decomposition provably injective.
+
+The `run_id` for a backtest is **derived from the `content_hash`** plus the window ID: `bt_{hash[:12]}_{window_id}`. This means the same pack replayed against the same window always produces the same `run_id` — and therefore the same sealed bytes — across repeats. This is what makes "re-run it yourself and compare hashes" a meaningful verification step.
+
+The closing policy is also pinned in the pack's manifest: `closing_policy = "con-040_last_pre_inrunning"`, meaning the closing line is the last pre-`InRunning` update. This policy is explicit and sealed, not inferred at runtime.
+
+## Running a backtest with the CLI
+
+Run the flagship backtest demo (offline, deterministic, no credentials required):
+
+```bash
+python scripts/demo_phase2d.py
+```
+
+Run against a real captured pack:
+
+```bash
+python scripts/demo_phase2d.py --pack /path/to/captured_pack --fixture-id <FIXTURE_ID> --serve
+```
+
+The `--serve` flag starts the local API server and prints `/runs/{id}/verify` URLs for each sealed run, so you can re-prove the results immediately.
+
+## The BacktestRunner
+
+Veridex uses **the same runtime for backtests and live runs** — there is no external backtest library and no second engine. A backtest is a ReplayPack replayed through the same `CompetitionRun` that the live loop drives. The `BacktestReport` is a pure projection of the sealed run: it reads no venue, no feed, and no LLM after sealing, so it cannot smuggle a fresh trust claim past the seal.
+
+The mode is **honestly labeled "Backtest"** on every surface. A backtest can never be labeled "Live." The total mode ladder is a total function — an unmapped source/execution pair raises rather than silently defaulting.
+
+## The real-data experiment
+
+Veridex ran 18 finished World Cup fixtures through the complete pipeline to produce the Run-001 and Run-002 results:
+
+- **18 fixtures** sealed into content-hashed ReplayPacks from real TxLINE odds history
+- **Run-001** (`CumulativeDriftAgent`): averaged **+61.19 bps CLV** across the filtered universe, beating all three acting deterministic baselines on this sample. This is a **candidate rung-1 CLV signal, not proven executable alpha** — CLV is measured against the sharp TxLINE close with no venue leg, and effective *n* ≈ 18 fixtures.
+- **Run-002** (venue lane): priced 94.7% of drift's in-scope 1X2 decisions against time-aligned Polymarket mids, but the result was a monotonic longshot ramp — the fingerprint of a de-margin-scale divergence, not strategy-specific alpha. `real_executable_edge_bps = None`. No fills were taken.
+
+All results were recomputed by the deterministic law from sealed evidence — never self-reported by the agent.
+
+## Honest labeling
+
+Veridex applies strict provenance labeling to every ReplayPack and backtest result:
+
+- **Synthetic packs** — the demo pack ships with `capture.synthetic: true` and `capture.provenance: "synthetic-illustrative"` stamped into `pack.json`. Every CLV number derived from a synthetic pack carries an inline caveat on all surfaces (manifest run entry, console summary, pack capture block).
+- **Unknown provenance** — an unmarked pack reads as `"unknown-provenance"` with a cautious caveat. It is never silently promoted to "real" or "captured."
+- **`real_executable_edge_bps = null`** — this field is always explicitly null in replay and backtest mode. A paper/replay path can never produce a fabricated executable-edge number.
+
+## Run modes in backtest context
+
+A backtest composes two fields:
+
+- `source_mode = "replay"` — plays recorded ticks from the ReplayPack
+- `execution_mode = "paper"` — no venue orders are submitted
+
+Scores, checks, and the sealed proof are produced identically to live runs. The only difference is the data source and execution mode, both of which are recorded honestly in the run's metadata. You can also run `execution_mode = "dry_run"` against a replay source to exercise the full policy/execution lifecycle with a simulated receipt — this is useful for testing production flow safely without real funds.
+
+## API endpoints
+
+| Endpoint | Description |
+|---|---|
+| `POST /backtest` | Run a backtest programmatically against a ReplayPack |
+| `GET /replay-packs` | List available ReplayPack catalog entries |
+| `POST /runs/{id}/verify` | Re-prove any sealed run — backtest, arena, or deployed agent — from sealed evidence |

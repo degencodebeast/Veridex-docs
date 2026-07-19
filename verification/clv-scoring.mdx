@@ -1,0 +1,102 @@
+---
+title: "Closing-Line Value Scoring in Veridex"
+sidebarTitle: "CLV Scoring"
+description: "Veridex scores agents on closing-line value recomputed from sealed evidence — not self-reported P&L, not Kelly sizing, not abstentions."
+---
+
+## What is closing-line value?
+
+Closing-line value (CLV) is the difference between the probability at which an agent entered a market and the TxLINE StablePrice consensus probability at close, expressed in basis points:
+
+```
+clv_bps = (closing_probability - entry_probability) × 10000
+```
+
+Both `closing_probability` and `entry_probability` are drawn from TxLINE's de-margined StablePrice consensus — outcome probabilities that sum to ~100%, with bookmaker margin already removed. Because CLV is computed entirely within this one probability space, bookmaker margin never contaminates the skill metric.
+
+## Why CLV is the only scored metric
+
+P&L is noisy: it rewards stake size, outcome luck, and hindsight-tuned bet sizing. CLV measures something cleaner — **did the agent beat the later market price?** A positive CLV means the agent entered at a probability more favorable than where the sharp market ultimately closed. That is a direct signal of trading edge, independent of how much was staked or whether the outcome happened to land.
+
+Veridex ranks the leaderboard on recomputed `avg_clv_bps` only. Confidence claims, Kelly fractions, and proof completeness are deliberately excluded from the rank key. The FAQ puts it plainly: "CLV is the primary rank metric because it asks whether the agent beat the later market price, which is a cleaner signal of trading edge."
+
+## How CLV is computed
+
+CLV is computed **deterministically** by `veridex/law/recompute.py` — the trust core — from the sealed event log. It never reads the agent's `claimed_edge_bps`:
+
+```
+recompute(entry_state, action, *, closing, source_mode)
+→ clv_bps = closing.stable_prob_bps[side] − entry.stable_prob_bps[side]
+```
+
+The agent's claimed edge is recorded as untrusted metadata and is structurally fenced in the Decision Inspector as `NOT AN INPUT TO SCORE`. Two separate code paths, no data flow between them.
+
+The law refuses to fabricate a result when the closing state is unavailable. If the closing market is suspended or missing, `recompute` returns `closing_suspended` or `closing_missing` and the action scores **invalid** — the law never imputes a last-known price.
+
+## CLV confidence and abstentions
+
+The `clv_confidence` tier (`low` / `medium` / `high`) keys off **scored picks only** — the count of actions with a valid integer `clv_bps`. Abstentions (WAIT actions) are law-valid but are never scored; they do not count toward the confidence sample.
+
+This is an enforced rule, not a convention. An earlier version of the platform keyed the tier off law-valid decisions (which include WAITs), so an agent that abstained a thousand times and scored zero picks would read "high confidence." The real-data experiment produced exactly that shape and exposed the overclaim. The fix is tested on both the leaderboard and backtest-report surfaces: **a thousand abstentions cannot produce a high-confidence record.**
+
+## What can never influence CLV ranking
+
+The leaderboard rank key is `avg_clv_bps desc → total_clv_bps desc → Brier asc → drawdown desc → action count desc → agent_id`. The following are **deliberately absent** from that key:
+
+- LLM-reported confidence or `claimed_edge_bps`
+- Kelly fraction or stake size
+- Proof completeness or anchor status
+- Abstention count or law-validity rate
+
+Proof completeness is an eligibility badge — a run in `partial` proof mode is not eligible for ranking. It is never a performance score.
+
+## The strategy doctrine
+
+Every quantity in the Veridex pipeline has a specific meaning and role. The table below is the single source of truth:
+
+| Quantity | Meaning | Role |
+|---|---|---|
+| **Fair Value** | TxLINE de-margined consensus probability | Market-implied; **never** re-de-vigged |
+| **Mispricing Gap** | Fair vs venue-implied probability in bps | Probability-space dislocation — not an edge, never scored |
+| **Executable Edge** | Forward EV at the actual venue price for the exact submitted size | Gates execution only; renders only with a real venue quote |
+| **CLV** | Recomputed from sealed entry vs close | **The only scored metric** |
+| **Stake / Kelly** | Capped fractional Kelly under the policy envelope | Policy sizing only; never a rank input |
+
+Because TxLINE StablePrice is already de-margined, Veridex **never re-de-vigs** anywhere in the pipeline. Re-vigging an already-fair probability would manufacture phantom edge.
+
+## Real-data experiment results
+
+Veridex ran two experiments end-to-end on real TxLINE odds history across 18 finished World Cup fixtures. Here is what the data said — unedited.
+
+### Run-001: CumulativeDriftAgent (candidate CLV signal)
+
+The `CumulativeDriftAgent` averaged **+61.19 bps CLV** across the 18-fixture filtered universe, beating all three acting deterministic baselines on this sample:
+
+| Baseline | Avg CLV |
+|---|---|
+| CumulativeDriftAgent | +61.19 bps |
+| Favorite | +4.61 bps |
+| Threshold-move | −126.5 bps |
+| Seeded-random | −341.67 bps |
+
+The agent was net-positive on 10 of 18 fixtures.
+
+**However:** this result did not survive out-of-sample testing. The surviving OU-totals sub-signal was taken out-of-sample (OOS) and falsified on its own metric — the sign flipped hard negative (in-sample +162 → OOS −254 bps, fixture-clustered) and was **NULL on independent settled outcomes** at only **N=2 effective fixtures** (the ~800 OU picks collapse to two match totals). Run-001 is kept as a benchmark, not a promoted edge. What makes it credible is its provenance: every CLV number was recomputed by the law from sealed evidence, never self-reported.
+
+### Run-002: Polymarket venue pricing (the trust moat)
+
+Run-002 tested whether the Run-001 candidate translated into Polymarket venue edge. The rung-2 venue lane matched **94.7% of drift's in-scope 1X2 decisions** against time-aligned Polymarket mids. But the estimated edge was a near-perfect **monotonic longshot ramp**:
+
+| Probability band | Estimated edge |
+|---|---|
+| 0–20% (longshots) | +607 bps |
+| 20–40% | +304 bps |
+| 40–60% | +90 bps |
+| 60–80% | +63 bps |
+| 80–100% (favorites) | +33 bps |
+
+This is the fingerprint of a favorite-longshot / de-margin-scale divergence — **not** strategy-specific alpha. Run-002 did **not** demonstrate executable venue edge. These are estimated mids, not fills. `real_executable_edge_bps = None`. No profit and no fillability claim.
+
+<Warning>
+CLV numbers from backtests on sealed data are not guarantees of future performance. Veridex is honest enough to prove when an agent had no edge — and it did exactly that on real World Cup data.
+</Warning>

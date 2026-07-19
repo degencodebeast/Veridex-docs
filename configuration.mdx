@@ -1,0 +1,179 @@
+---
+title: "Configure Veridex: Credentials and Environment"
+sidebarTitle: "Configuration"
+description: "Set up TxLINE credentials, Solana keypair, Polymarket keys, and database connection for Veridex live and anchored runs."
+---
+
+Veridex separates strategy configuration from credentials by design. Your agent TOML holds strategy and policy knobs only — **credentials never go in the TOML** (COM-001). The TxLINE JWT, API token, Solana keypair path, and venue keys are read at runtime from `veridex/.env` via `veridex.config.Settings`.
+
+Copy `.env.example` to `veridex/.env` and fill in the values relevant to the features you want to enable. Everything in the default demo runs without credentials; values are validated only when the corresponding live operation is attempted.
+
+---
+
+## Environment Variables
+
+### TxLINE (live odds feed and on-chain subscribe)
+
+```bash
+# Guest-JWT for the live TxLINE SSE feed.
+# Validated only when a live operation is attempted.
+JWT=
+
+# X-Api-Token header for the live TxLINE feed.
+TXLINE_X_API_TOKEN=
+
+# Program ID for the on-chain subscribe() transaction (secret-by-policy).
+TXLINE_SUBSCRIBE_PROGRAM_ID=
+```
+
+`JWT` and `TXLINE_X_API_TOKEN` are required for any run with `source_mode = "live"` in the agent TOML. Without them, replay and backtest modes work fully offline.
+
+---
+
+### Solana (run anchoring)
+
+```bash
+# Path to the Solana keypair file used to anchor run manifests as Solana Memos.
+# Required when anchor = true in the agent TOML.
+SOLANA_KEYPAIR_PATH=
+```
+
+When `SOLANA_KEYPAIR_PATH` is set and `anchor = true` in the agent config, the run's `manifest_hash` is committed to Solana as a Memo transaction. Anchoring confirms in approximately 1.3 seconds on devnet. Without this credential, runs complete normally and the `anchor` check honestly reports `not_applicable` or `pending`.
+
+---
+
+### Database
+
+```bash
+# Full Postgres connection string.
+# Set to enable the durable PostgresStore.
+# If set but unreachable, Veridex fails closed at startup — no silent InMemory fallback.
+# Leave UNSET for local-dev InMemory mode (state lost on restart).
+DATABASE_URL=postgresql://user:password@host:5432/veridex
+
+# Optional connection-pool tuning (psycopg_pool.AsyncConnectionPool).
+DB_POOL_MIN_SIZE=1
+DB_POOL_MAX_SIZE=10
+
+# Startup reachability timeout in seconds.
+# The pool raises past this threshold, causing a fail-closed startup.
+DB_CONNECT_TIMEOUT_S=10
+```
+
+---
+
+### API Serving
+
+```bash
+# Comma-separated exact web origins allowed by CORS (no wildcards, no localhost default).
+# A missing value refuses to start.
+CORS_ORIGINS=https://your-web-app.example.com
+
+# Bearer token required for control-plane writes
+# (start non-paper runs, approve, kill-switch).
+OPERATOR_TOKEN=
+
+# Bind address and port for uvicorn.
+# The container binds all interfaces by default.
+HOST=0.0.0.0
+PORT=8000
+
+# Persistent, mounted spool directory for the write-ahead log (WAL).
+# Must be a durable volume, not ephemeral disk.
+WAL_DIR=/data/wal
+```
+
+---
+
+### Auth
+
+```bash
+# Privy App ID and static SPKI/PEM ES256 verification key.
+# Copied from the Privy dashboard — no network or JWKS lookup is performed.
+# Required in production (APP_ENV=production + AUTH_MODE=privy).
+PRIVY_APP_ID=
+PRIVY_VERIFICATION_KEY=
+
+# Deployment environment gate.
+# Any value other than development / dev / test / local is treated as PRODUCTION,
+# which hard-refuses the AUTH_MODE=dev bypass and requires the two PRIVY_* values above.
+APP_ENV=development
+
+# `privy` verifies a real Privy token on every deploy request.
+# `dev` is the local-dev bypass — refused in production.
+AUTH_MODE=dev
+```
+
+---
+
+### Frontend
+
+```bash
+# Absolute API origin the Next.js app fetches (required for SSR).
+# A relative URL cannot be fetched in Node; a missing value fails loud on the server.
+# The Arena WebSocket base is derived from this by swapping http(s) for ws(s) —
+# no separate WS environment variable is read.
+NEXT_PUBLIC_API_BASE=https://your-api.example.com
+```
+
+---
+
+## Agent TOML Configuration
+
+The agent TOML holds all non-secret strategy and policy configuration. Below is the full `veridex_agent/sample_agent.toml` as shipped:
+
+```toml
+# Sample standalone-agent run config (WD-3). NON-SECRET ONLY.
+# Credentials (TxLINE JWT/X-Api-Token, Solana keypair, venue keys) come from veridex/.env
+# via veridex.config.Settings — NEVER from this file (COM-001).
+
+agent_id = "momentum-desk-1"
+strategy = "momentum"          # baseline | momentum | llm
+source_mode = "replay"         # replay | live
+fixture_path = "tests/fixtures/wd2_momentum_replay.json"
+
+# momentum tuning
+lookback = 8
+min_momentum_bps = 50
+
+# policy envelope (operator guardrails)
+max_stake = 100.0
+min_edge_bps = 8
+market_allowlist = ["M"]
+venue_allowlist = ["sx_bet"]
+execution_mode = "paper"       # paper | dry_run | live_guarded
+anchor = false                 # true → real Solana Memo anchor (requires SOLANA_KEYPAIR_PATH)
+```
+
+### Field Reference
+
+| Field | Type | Description |
+|---|---|---|
+| `agent_id` | string | A human-readable identifier for this agent instance. Folded into the pinned `config_hash` alongside all other strategy-affecting fields. |
+| `strategy` | string | The strategy family to instantiate. Options: `baseline`, `momentum`, `llm`. Each maps to a strategy class in `veridex/strategies/`. |
+| `source_mode` | string | Where the agent reads odds data. `replay` uses a local ReplayPack (no network required). `live` streams from the TxLINE SSE feed (requires `JWT` and `TXLINE_X_API_TOKEN`). |
+| `fixture_path` | string | Path to the ReplayPack fixture file (used when `source_mode = "replay"`). |
+| `lookback` | integer | The lookback window (in ticks) for the momentum signal's EWMA computation. |
+| `min_momentum_bps` | integer | Minimum momentum signal strength in basis points required before the agent proposes an action. |
+| `max_stake` | float | Maximum stake per order in the policy envelope's stake cap. Units match the venue's stake denomination. |
+| `min_edge_bps` | integer | Minimum executable edge in basis points required for the policy gate to permit execution. |
+| `market_allowlist` | list of strings | Markets the agent is permitted to trade. The policy gate rejects any proposal targeting a market not in this list. |
+| `venue_allowlist` | list of strings | Venue adapters the agent is permitted to use for execution. |
+| `execution_mode` | string | How actions are executed. `paper` produces proofs with no venue orders. `dry_run` simulates the full execution path. `live_guarded` is the only mode that can submit real orders, and only when all operator arming conditions are met. |
+| `anchor` | boolean | When `true`, the run's `manifest_hash` is anchored to Solana as a Memo transaction after sealing. Requires `SOLANA_KEYPAIR_PATH` in `veridex/.env`. |
+
+### Strategy instance identity and config hashing
+
+Changing any strategy-affecting field — including `agent_id`, thresholds, allowlists, or `execution_mode` — creates a **new pinned `config_hash`**. This is intentional: two configs on the same template can produce different CLV and drawdown, and Veridex must be able to replay exactly which config caused which actions. The `config_hash` is folded into the sealed manifest and verified by the proof pipeline.
+
+No TOML field can bypass Veridex's trust rules. Configs change trading behavior and profitability; they cannot override law/recompute, policy gating, evidence integrity, the seven proof checks, receipt separation, or scoring immutability.
+
+---
+
+<Note>
+Setting `anchor = true` requires `SOLANA_KEYPAIR_PATH` to be set in `veridex/.env`. Runs with `anchor = false` (the default) complete normally; the `anchor` proof check honestly reports `not_applicable`. Not all runs need to be anchored — anchoring is typically reserved for live and production deployments.
+</Note>
+
+<Warning>
+Never commit real credentials to version control or bake them into a Docker image. Pass secrets at runtime using `--env-file veridex/.env` with Docker. The `.env.example` file in the repository contains no real secrets and is safe to commit; `veridex/.env` is in `.gitignore`.
+</Warning>

@@ -1,0 +1,43 @@
+---
+title: "Head-to-Head Agent Duel in the Veridex Arena"
+sidebarTitle: "Head-to-Head"
+description: "Compare two agents side-by-side on the same sealed fixture to see exactly where their strategies diverge and what the law scored."
+---
+
+The **Head-to-Head Duel** view lets you place two competing agents side by side on the same sealed TxLINE fixture and inspect exactly where their strategies diverge — what each proposed, what the law scored, and what the policy gate decided.
+
+## What the Head-to-Head Duel Shows
+
+For each fixture in the competition, the Duel view renders a synchronized comparison of both agents' decision trails:
+
+| Column | What you see |
+|---|---|
+| **Proposed action** | The `AgentAction` each agent emitted: market, side, and any parameters. The agent's claimed edge appears here as untrusted metadata, labeled `NOT AN INPUT TO SCORE`. |
+| **Law's CLV recompute** | The deterministic closing-line value computed from the sealed entry price versus the TxLINE close — the same calculation for both agents, from the same sealed evidence. |
+| **Policy verdict** | Whether the two-phase policy gate allowed or denied the action, and which gate condition (kill-switch, stake cap, staleness, slippage, executable edge, circuit breaker) determined the outcome. |
+| **Proof check results** | The per-run proof check verdicts — evidence integrity, LLM boundary, metrics recomputed, manifest binding, policy obedience, receipt separation, and anchor status — so you can confirm both runs are fully verified before drawing conclusions from the comparison. |
+
+## Why It's a Fair Comparison
+
+The Duel is a fair fight by construction:
+
+- **Same ticks.** Both agents receive the identical `MarketState` snapshot at every tick, derived from the same single TxLINE normalizer. No agent sees a fresher price or a later update.
+- **Same law.** CLV is recomputed by the same deterministic `law/recompute.py` code over the same sealed evidence for both agents. The law does not behave differently depending on which agent it is scoring.
+- **Same policy.** Both agents are evaluated by the same policy envelope, the same circuit breaker, the same stake caps. Policy cannot be more permissive for one agent than the other.
+
+When two agents diverge in the Duel view — one proposes and one abstains, one earns positive CLV and the other does not — the explanation is **strategy**, not a difference in inputs, scoring rules, or execution conditions.
+
+## Accessing the Head-to-Head View
+
+The Duel view is available through the Arena UI after a competition completes and both runs are sealed:
+
+1. Open the **Arena** from the main navigation.
+2. Select the competition you want to inspect.
+3. Choose **Head-to-Head** from the competition results panel.
+4. Select the two agents you want to compare. The Duel view loads their synchronized decision trails.
+
+You can step through fixtures one at a time or filter to markets where the agents disagreed — one proposed an action the other did not.
+
+## Competition Fairness Note
+
+Agents run **concurrently** on identical sealed inputs throughout a competition. The sealed `ReplayPack` or live TxLINE window is fixed before any agent connects: no agent receives a different feed, observes a tick the other missed, or benefits from seeing a later close. The same guarantee applies in the Duel view — when you compare two agents, you are comparing their strategies on a level playing field, which is what makes the comparison meaningful and the result trustworthy.

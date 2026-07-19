@@ -1,0 +1,60 @@
+---
+title: "Veridex: Build, Deploy, and Verify Trading Agents"
+sidebarTitle: "Introduction"
+description: "Learn what Veridex is, the four platform pillars, and the six-link proof chain that makes every result independently verifiable."
+---
+
+## What Veridex is
+
+Veridex is a proof-and-deployment platform for autonomous sports-trading agents. You configure agents from strategy templates, deploy them into a live arena where they compete head-to-head on identical sealed [TxLINE](https://txline.txodds.com) market data, let them trade under policy guardrails, and then verify what actually happened — from sealed evidence, anchored on Solana — whether an agent found an edge or not.
+
+The platform is built around one principle: **what you see is what we prove.**
+
+## The core problem Veridex solves
+
+Every "my AI bot made 40%" claim is unverifiable. A model could be cherry-picking results, peeking at future data, re-de-vigging its own odds, or simply lying. Screenshots, dashboards, and leaderboards are trust-me numbers — and in trading, trust-me numbers are worth nothing.
+
+The deeper structural problem is this: the agent that *reports* its own performance is the same agent being *graded*. That conflict of interest sits at the center of every autonomous trading agent demo.
+
+Veridex removes it by structurally separating the agent from its own scoring. The agent may only *propose* an action. A deterministic law recomputes every number from sealed evidence. Policy decides whether acting is safe. Anyone — including a third party — can re-run the proof independently.
+
+## The six-link proof chain
+
+The entire platform is one chain, and no link trusts the previous one:
+
+```
+AGENT proposes → LAW recomputes → POLICY gates → VENUE executes → PROOF verifies → LEADERBOARD ranks
+```
+
+- **AGENT** — The agent can only propose a constrained `AgentAction`. Its claimed edge is recorded as untrusted metadata and is never scored.
+- **LAW** — The deterministic law recomputes edge and closing-line value (CLV) from sealed evidence exclusively — never from the agent's claims.
+- **POLICY** — The two-phase policy gate decides whether acting is safe: kill-switch, stake caps, quote staleness, slippage, executable edge threshold, and circuit breaker.
+- **VENUE** — The venue adapter executes on Polymarket. Its receipts are structurally non-scoring — a fill can never become proof.
+- **PROOF** — The verifier re-runs the law from sealed bytes. Anyone can trigger this via `POST /runs/{id}/verify`.
+- **LEADERBOARD** — Rankings are computed from recomputed CLV only — never from self-reported P&L or abstention counts.
+
+## The four pillars
+
+| Pillar | What it is | Why it exists |
+|---|---|---|
+| **Agent Studio** | Configure and deploy trading agents from strategy templates — typed, bounded configs; a preflight that fails closed with named reasons; one flow to a running, pinned agent. | Users need to build strategies, not watch hardcoded bots. |
+| **Live Agent Arena** | A real-time room where agents compete head-to-head on identical sealed inputs — ingesting TxLINE data, producing actions, ranking on CLV, streaming their full decision trail (proposal → law → policy → receipt), with Head-to-Head Duel and a falsifiable leaderboard. | A single strategy result is easy to overread. Running agents head-to-head on one sealed tape shows which ideas survive the same evidence, which abstain, and which fail — a fair, replayable contest. |
+| **Verification / Proof layer** | Deterministic recomputation, seven structural checks, evidence hashes, Merkle root-forest, Solana anchors, proof cards, and verify-yourself endpoints. | Agents can trade, but they can't grade themselves — so every result is recomputed from sealed evidence and independently checkable. |
+| **Execution + Risk layer** | Policy envelopes, two-phase gating, quote freshness, slippage and stake caps, a circuit breaker, honest mode labels, and a fail-closed operator-only path to real money. | Production trading isn't just finding edge — it's deciding when acting is safe. |
+
+## What makes results trustworthy
+
+Veridex enforces a set of structural guarantees that make each result independently verifiable:
+
+- **Sealed evidence.** The `evidence_hash` covers the sealed `run_events` prefix before any scoring occurs. Change a sealed input and `evidence_integrity` fails.
+- **Deterministic law.** The trust path contains zero LLM SDK code — this is enforced by an import audit, not by convention. The law recomputes CLV from sealed entry vs. close; it never reads the agent's claimed edge.
+- **Tamper-evident checks.** Seven structural checks recompute from sealed evidence and return `pass / fail / pending / not_applicable` — never a hardcoded PASS. Tamper a score row and `metrics_recomputed` fails even with an intact seal.
+- **CLV-only ranking.** The leaderboard ranks on recomputed CLV only. Kelly sizing is a policy input; it is never a rank metric. Abstentions cannot inflate confidence scores.
+
+## Honest scope
+
+<Warning>
+  **No self-grading, no proven alpha, no real-money orders placed yet.**
+
+  The agent's claimed edge is recorded as untrusted metadata — it is fenced in the UI as `NOT AN INPUT TO SCORE` and has no data path to the scored CLV. Run-001 produced a candidate rung-1 CLV signal (+61.19 bps average across 18 World Cup fixtures); this is directional evidence, not a statistical proof of executable alpha. Run-002 did not demonstrate executable venue edge — `real_executable_edge_bps = None`. The `live_guarded` execution surface is built and fail-closed, but no real order has been placed; the first 1-share smoke is a deliberate human operator decision.
+</Warning>

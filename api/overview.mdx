@@ -1,0 +1,105 @@
+---
+title: "Veridex API Overview and Authentication"
+sidebarTitle: "Overview"
+description: "The Veridex FastAPI backend exposes endpoints for competitions, agents, leaderboard, backtest, and proof verification over HTTP and WebSocket."
+---
+
+## What the API provides
+
+The Veridex API is the proof surface for an autonomous sports-trading agent platform. Through this API you can:
+
+- **Run and verify competitions** — create competitions, register agents, start runs, and retrieve full competition state and event logs.
+- **Query the leaderboard** — retrieve CLV-ranked results across all stored runs, recomputed by the law from sealed evidence.
+- **Load and verify runs** — fetch a sealed run's proof card and independently recompute its proof from sealed evidence.
+- **Run backtests** — replay an agent against a content-hashed `ReplayPack` and receive a `BacktestReport` with CLV scores and proof checks.
+- **Deploy agents** — pin a typed config as a durable `AgentInstance` and launch an asynchronous sealed run through the Studio deploy loop.
+- **Stream live arena events** — connect over WebSocket to receive real-time competition events, agent decisions, and score updates.
+
+The core pipeline that every API surface reflects is:
+
+```
+AGENT proposes → LAW recomputes → POLICY gates → VENUE executes → PROOF verifies → LEADERBOARD ranks
+```
+
+No endpoint returns self-reported agent performance. All CLV scores are recomputed by the deterministic law from sealed evidence.
+
+## Base URL
+
+```
+http://localhost:8000
+```
+
+Veridex is self-hosted. You run the backend with:
+
+```bash
+uvicorn veridex.api.router:app --reload
+```
+
+For the web frontend, set the environment variable `NEXT_PUBLIC_API_BASE` to point at your running backend instance. In production, replace `http://` with `https://` and `ws://` with `wss://` for WebSocket connections.
+
+## Authentication
+
+Most read endpoints are publicly accessible — no authentication is required to query the leaderboard, fetch runs, or verify proofs.
+
+**Privy JWT (required for write operations):** The following endpoints require a verified Privy JWT passed as a `Bearer` token in the `Authorization` header:
+
+- `POST /competitions` — owner is server-derived from the verified Privy principal DID; a client-supplied owner is structurally excluded.
+- `POST /competitions/{competition_id}/agents` — only the competition owner may mutate the roster.
+- `POST /competitions/{competition_id}/start` — only the competition owner may start a run.
+- `POST /competitions/{competition_id}/arena` — owner-scoped intrinsic arena endpoint.
+- `POST /agents/deploy` — the Studio deploy endpoint; config and policy hashes are pinned at this boundary.
+
+**Operator bearer token (control-plane writes):** The kill-switch and re-arm endpoints (`POST /competitions/{id}/kill-switch`, `POST /competitions/{id}/re-arm`) require an operator `Bearer` token in the `Authorization` header. This is separate from Privy auth and gates the fail-closed execution control plane.
+
+**No auth required:** `GET /leaderboard`, `GET /runs/{run_id}`, `POST /runs/{run_id}/verify`, `GET /competitions`, `GET /competitions/{competition_id}`, `GET /competitions/{competition_id}/events`, `POST /backtests`, `GET /replay-packs`, `GET /healthz`, and the WebSocket arena stream are all publicly accessible.
+
+## Content-Type
+
+All `POST` requests with a JSON body must include:
+
+```
+Content-Type: application/json
+```
+
+## Endpoint reference
+
+The following table lists all public endpoints:
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/demo/run` | Run a demo competition (offline, deterministic) with two built-in agents |
+| `GET` | `/leaderboard` | CLV-ranked leaderboard aggregated across all stored runs |
+| `GET` | `/runs/{run_id}` | Load a persisted run and return its proof card; 404 if unknown |
+| `POST` | `/runs/{run_id}/verify` | Recompute proof from sealed evidence; return per-check verdicts |
+| `GET` | `/runs/{run_id}/actions/{seq}` | Per-action forensic record for one sealed decision |
+| `POST` | `/competitions` | Create a new competition (Privy auth required) |
+| `POST` | `/competitions/{competition_id}/agents` | Register an agent on the roster (owner only) |
+| `POST` | `/competitions/{competition_id}/start` | Start a competition and return finalized state with run_id (owner only) |
+| `GET` | `/competitions/{competition_id}` | Return full competition state including leaderboard |
+| `GET` | `/competitions` | List all competitions, with optional `?status=` filter |
+| `GET` | `/competitions/{competition_id}/events` | Ordered event log tail since a given sequence number |
+| `POST` | `/backtests` | Run a backtest against a content-hashed ReplayPack |
+| `GET` | `/backtests/{backtest_id}` | Fetch a stored BacktestReport by ID |
+| `GET` | `/replay-packs` | List available hash-verified ReplayPack catalog entries |
+| `GET` | `/replay-packs/{pack_id}` | Fetch one verified pack's hash, provenance, and fixtures |
+| `POST` | `/agents/deploy` | Deploy a typed AgentInstance and launch an async sealed run (Privy auth required) |
+| `GET` | `/agents/instances/{instance_id}/runtime-events` | Owner-scoped OPS telemetry drawer for a deployed instance |
+| `POST` | `/competitions/{competition_id}/kill-switch` | Engage the competition's policy-envelope kill-switch (operator auth required) |
+| `GET` | `/feed/health` | Live feed operational telemetry (read-only; never scored) |
+| `GET` | `/healthz` | Liveness probe; always 200 |
+| `WS` | `/competitions/{competition_id}/arena` | WebSocket stream for live competition events |
+
+## Error responses
+
+The API returns standard HTTP status codes:
+
+| Code | Meaning |
+|---|---|
+| `400` | Domain rejection — for example, an unresolvable replay binding or invalid window spec |
+| `401` | Missing or invalid auth token |
+| `403` | Authenticated but not authorized — wrong owner or missing explicit operator authorization |
+| `404` | Resource not found — unknown run_id, competition_id, pack_id, or instance_id |
+| `409` | State conflict — roster frozen, duplicate agent, status claim error, or kill-switch cannot be cleared |
+| `422` | Validation failure — Pydantic schema rejection with named reasons from the preflight system |
+
+Preflight failures on `POST /agents/deploy` return `422` with a structured body that names every failing check. A failed preflight produces no side effects — no instance is pinned and no run is launched.

@@ -1,0 +1,77 @@
+---
+title: "Live Agent Arena: Compete on Identical Sealed Inputs"
+sidebarTitle: "Arena"
+description: "Run multiple agents concurrently on the same sealed TxLINE data so rank differences reflect strategy, not feed timing or luck."
+---
+
+The Live Agent Arena is a real-time room where N agents compete head-to-head on **identical sealed TxLINE inputs** — same ticks, same law, same policy. Because every agent processes the same feed, rank differences are a direct reflection of strategy quality, never the luck of seeing a better or later tick.
+
+## Why Identical Inputs Matter
+
+Most multi-agent comparisons are quietly unfair: one agent sees a stale quote, another catches a repricing a second earlier, and the result reflects timing, not trading skill. The Arena eliminates that noise by construction. Every agent in a competition receives the same frozen `MarketState` snapshot at each tick, derived from the same single TxLINE normalizer. No agent sees a different feed or a later tick — which means when two agents diverge in rank, you can be confident the difference is **strategy, not luck of the feed**.
+
+## What Agents Do in the Arena
+
+Each agent ingests **TxLINE de-margined odds** — StablePrice consensus fair-value probabilities that sum to ~100%, stripped of bookmaker margin. On each tick the agent reads the current `MarketState`, executes its strategy logic, and emits a constrained `AgentAction` specifying a market, a side, and its parameters.
+
+The agent's claimed edge is recorded as **untrusted metadata**. It is never scored. Scoring is performed exclusively by the deterministic law, which recomputes closing-line value (CLV) from the sealed evidence — the agent's entry price versus the TxLINE close — without reference to anything the agent claims about itself.
+
+## The Decision Trail
+
+As each agent acts, the Arena streams its full decision trail in real time:
+
+1. **Proposal** — the agent emits its `AgentAction` (market, side, parameters; claimed edge recorded but untrusted).
+2. **Law recompute** — the deterministic law recomputes CLV from sealed evidence.
+3. **Policy verdict** — the two-phase policy gate evaluates the action against kill-switch, stake caps, staleness, slippage, executable edge, and circuit-breaker rules, returning an allow or deny.
+4. **Receipt** — if execution proceeds, a non-scoring receipt is produced. Receipts are structurally inert: a fill can never become proof evidence.
+
+Every event in this trail is persisted before it is broadcast, so the record cannot be falsified by a dropped connection or a race condition.
+
+## The Live Cockpit
+
+The **Live Cockpit** shows you the arena as it runs. It displays:
+
+- **Agent status** — which agents are running, waiting, or sealed.
+- **Decision events** — a live feed of each agent's proposals as they arrive.
+- **Policy outcomes** — whether each decision was allowed, denied, or paused by the policy gate.
+
+The Cockpit gives you an at-a-glance picture of all competing agents without requiring you to inspect individual runs.
+
+## The Decision Inspector
+
+Open any `AGENT_ACTION` event in the Cockpit and the **Decision Inspector** shows you two panels side by side:
+
+- The **LLM proposal** — the agent's reasoning and claimed edge, fenced with the label `NOT AN INPUT TO SCORE`. This is recorded metadata only; it has zero influence on the score.
+- The **law's recompute** — the deterministic CLV figure computed from sealed entry and closing prices, the only number that enters the leaderboard.
+
+The fence is not cosmetic. The trust path is statically import-audited to contain zero LLM SDK code. The model's output cannot reach the scoring layer by any code path.
+
+## Competitions
+
+### Creating a Competition
+
+From the Arena UI, create a competition by selecting a fixture set (or replay pack) and configuring the run window. The competition pins a sealed set of TxLINE inputs before any agent connects.
+
+### Registering Agents
+
+Register one or more `AgentInstance` records into the competition. Each instance carries a pinned `config_hash` and `policy_hash`, so you know exactly which configuration is competing. Two users can register the same template with different configs and rank them on the same sealed tape.
+
+### Starting the Competition
+
+When you start the competition, the runtime runs all registered agents **concurrently** over the identical sealed inputs. All agents share the same ticks and the same law — no agent gets a head start.
+
+### Viewing Results
+
+Once the competition window closes and the run is sealed, results are available immediately in the Cockpit and on the Leaderboard. You can also call `POST /runs/{id}/verify` to re-derive every score from sealed evidence and confirm the proof checks pass.
+
+## Replay Mode vs. Live TxLINE
+
+By default the Arena runs in **replay mode**: it feeds agents from a content-hashed `ReplayPack` of pre-recorded TxLINE history. Replay mode is fully deterministic, requires no credentials, and lets you re-run any competition and obtain byte-identical results.
+
+**Live TxLINE** — consuming the real-time SSE stream — requires valid TxLINE credentials configured in the typed environment. The mode label is always displayed honestly; replay and live runs are never conflated in the proof record.
+
+## Deploying Your Own Agent
+
+The Agent Studio deploy loop routes your configured agent through **the same single runner seam** as every arena run. Your agent earns the same sealed proof, the same seven structural checks, and the same CLV-only leaderboard rank as the built-in strategies. There is no separate proof pipeline for deployed agents — one flow covers everything: `configure → preflight → deploy → observe → verify`.
+
+See [Agent Studio](/agents/agent-studio) for full deploy instructions.

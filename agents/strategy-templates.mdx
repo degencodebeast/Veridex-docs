@@ -1,0 +1,148 @@
+---
+title: "Veridex Strategy Templates for Trading Agents"
+sidebarTitle: "Strategy Templates"
+description: "Choose from rules-based, LLM-guided, and market-making strategy templates, each configurable with typed parameters and a deterministic config hash."
+---
+
+A Veridex deploy is a pinned strategy instance built from a template and a config:
+
+```
+AgentTemplate + AgentConfig + PolicyEnvelope = AgentInstance
+```
+
+The **AgentTemplate** is the strategy family — the signal logic, decision algorithm, and market regime it targets. The **AgentConfig** is the concrete deployed instance: the specific thresholds, lookback windows, market universe, sizing rules, and execution mode you set. Two users can deploy the same template with different configs and get different CLV, PnL, hit rate, and drawdown — that is the point of Agent Studio.
+
+---
+
+## Available templates
+
+The following strategy templates are available in Veridex. Each is a separate, deterministic, proposer-only agent: it proposes an `AgentAction`; the deterministic law recomputes edge and CLV from sealed evidence. No template self-certifies its own score.
+
+<Tabs>
+  <Tab title="momentum (Sharp Momentum v2)">
+    **Template key:** `momentum`  
+    **Class:** `SharpMomentumStrategy` / `SharpMomentumAgent` (v2)  
+    **File:** `veridex/strategies/momentum.py`  
+    **Proof mode:** `reproducible`
+
+    A false-positive-controlled line-movement detector grounded in the line-movement literature (Simon 2024, *Management Science*). It does not predict outcomes — it detects sustained, statistically significant TxLINE repricing and proposes the side the market is confirming.
+
+    The detection pipeline, in order:
+
+    1. **Logit-space movements** — probabilities are converted to log-odds before measurement, so a 2%→3% and a 50%→51% move are correctly treated as different-sized events.
+    2. **EWMA smoothing** (`alpha`) — denoises single-tick spikes before the robust-z gate.
+    3. **Robust z-score** (median/MAD, `scale_floor`-floored) of the latest smoothed movement vs its recent window — immune to a lone outlier. The `scale_floor` prevents a flat market from dividing by a near-zero MAD when it suddenly reprices.
+    4. **Directional Page-Hinkley change-point** (`ph_delta`, `ph_lambda`) — confirms the move is **sustained and in the same direction** as the shock. A downward change-point cannot confirm an upward move.
+    5. **Persistence confirmation** — at least 2 of the last 3 smoothed movements must share the shock's direction AND their cumulative logit move must clear `persistence_logit`.
+    6. **Per-market cooldown** (`cooldown_ticks`) — suppresses a refire for `cooldown_ticks` ticks after the market fires.
+
+    A side is flagged only when **all** gates pass (AND, not OR). A lone Page-Hinkley trip or lone persistence run does not fire — the false-positive reduction is the point. Operates on 1X2 and totals market families only (props are deferred).
+
+    **Configurable parameters:** `alpha`, `z_threshold`, `ph_delta`, `ph_lambda`, `cooldown_ticks`, `warmup_ticks`, `min_movements`, `lookback`, `scale_floor`, `persistence_logit` — 10 parameters total, all folded into `config_hash`.
+  </Tab>
+  <Tab title="cumulative-drift">
+    **Template key:** `cumulative-drift`  
+    **Class:** `CumulativeDriftAgent`  
+    **File:** `veridex/strategies/drift.py`  
+    **Proof mode:** `reproducible`
+
+    A smooth, multi-day repricing detector — the complementary regime to Sharp Momentum v2. Where `momentum` catches abrupt sharp-money moves, `cumulative-drift` catches smooth, sustained repricing where the de-vigged probability grinds monotonically in one direction over many ticks or days.
+
+    The detection pipeline:
+
+    1. **Cumulative logit drift** — `logit(latest) − logit(first)` over the side's observed window. A genuine sustained repricing accrues a large same-signed cumulative logit move.
+    2. **EWMA-slope trend strength** (`ewma_slope_alpha`) — an EWMA of per-tick drift direction (`+1` up / `−1` down / `0` flat). A smooth monotone rise smooths toward `+1`; choppy noise smooths toward `0`. This is the "is it actually trending?" gate that separates a real drift from a random walk that merely ends higher.
+
+    A side fires only when: it has been observed at least `min_tick_count` times, its observation horizon spans at least `min_horizon_s` seconds, its cumulative logit drift clears `cum_drift_logit_min`, and its EWMA-slope trend strength clears `trend_strength_min`. This is the thin-data guard — on a short or fast-but-brief tape, the agent stays quiet.
+
+    **Configurable parameters:** `cum_drift_logit_min`, `ewma_slope_alpha`, `trend_strength_min`, `min_tick_count`, `min_horizon_s`, `close_quality_required`, `cooldown_ticks`.
+
+    <Note>
+    The `CumulativeDriftAgent` produced the strongest result in the Veridex World Cup backtest (Run-001: +61.19 bps avg CLV across 18 fixtures, beating all three deterministic baselines). This is a candidate signal, not proven executable alpha — see the README for the honest run-notes.
+    </Note>
+  </Tab>
+  <Tab title="value">
+    **Template key:** `value`  
+    **Class:** `ValueVsVenue` (`vvv_signal`)  
+    **File:** `veridex/strategies/value_vs_venue.py`  
+    **Proof mode:** `reproducible`
+
+    A fair-value-vs-venue agent that compares TxLINE's de-margined consensus fair probability against an injected venue decimal price to surface an estimated executable edge:
+
+    ```
+    mispricing_gap_bps = txline_fair_probability_bps − venue_implied_probability_bps
+    executable_edge    = txline_fair_probability × venue_decimal_odds − 1
+    ```
+
+    The venue price enters only through an injected `VenuePriceSource`, keyed by `(fixture_id, market_key, side, ts)` — time-aligned to the tick's decision coordinate. When no quote is available within the freshness bound, the agent returns `WAIT` rather than act on a stale price.
+
+    **Important trust boundary:** The estimated executable edge and venue price are **not sealed into the evidence hash** and are never scored. The action carries only TxLINE-derived fields (market_key, side, and a static number-free reason string). The edge number is explanatory context, not a ranked axis.
+  </Tab>
+  <Tab title="llm">
+    **Template key:** `llm`  
+    **Class:** `LLMDriftCheckpointRunner` (LLM-Drift)  
+    **File:** `veridex/strategies/llm_drift.py`  
+    **Proof mode:** `LLM/evidence-verified`
+
+    An LLM-guided directional agent that lets a model interpret the same `DriftFeatureSnapshot` that the deterministic `CumulativeDriftAgent` uses — a rules-vs-reasoning comparison on identical evidence and identical decision opportunities.
+
+    The model receives only the deterministic, trusted-code-computed feature snapshot; it has no history, no memory, and no tools (`tools=[]` is a hard invariant). The snapshot's `evidence_hash` is computed before the call and embedded as the call's evidence coordinate. Any rationale, confidence, or claimed edge the model places in `params` is untrusted display metadata — the deterministic law recomputes edge and CLV from sealed evidence and does not trust the model's numbers.
+
+    **The LLM is outside the audited trust path.** The trust path is import-audited to contain zero LLM SDK code. The model proposes; the law scores. The `proof_mode` for LLM-Drift runs is `LLM/evidence-verified` rather than `reproducible`.
+
+    The checkpoint state machine allows one in-flight LLM call at a time. A completed-fresh call produces at most one scored action; a completed-stale call is dropped. Every model response is revalidated into a typed `AgentAction` before it can affect anything.
+  </Tab>
+  <Tab title="baseline">
+    **Template key:** `baseline`  
+    **File:** `veridex/strategies/`  
+    **Proof mode:** `reproducible`
+
+    Deterministic baseline agents used for benchmarking. The three baselines included in the World Cup backtest (Run-001) were: favorite-follower (+4.6 bps avg CLV), threshold-move (−126.5 bps), and seeded-random (−341.7 bps). Baselines run through the same law, policy, and proof pipeline as any other template — their results are just as verifiable and just as falsifiable.
+  </Tab>
+</Tabs>
+
+---
+
+## Key configurable parameters
+
+The following parameters appear across templates and in `sample_agent.toml`. All strategy-affecting parameters are folded into the `config_hash`.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `lookback` | `int` | Maximum observations retained per market (the momentum/drift window). |
+| `min_momentum_bps` | `int` | Minimum positive momentum (bps) a side must show to be flagged (v1 / simple momentum). |
+| `max_stake` | `float` | Maximum stake per order, in the policy envelope. |
+| `min_edge_bps` | `int` | Minimum executable edge (bps) required for the policy gate to allow execution. |
+| `market_allowlist` | `list[str]` | Market keys the agent is permitted to act on. |
+| `venue_allowlist` | `list[str]` | Venues the agent is permitted to route to. |
+| `execution_mode` | `string` | One of `paper`, `dry_run`, or `live_guarded`. Controls whether real orders are submitted. |
+| `source_mode` | `string` | One of `replay` or `live`. Controls whether the agent consumes a sealed ReplayPack or a live TxLINE feed. |
+| `anchor` | `bool` | When `true`, anchors the run manifest hash as a Solana Memo. Requires `SOLANA_KEYPAIR_PATH` in `veridex/.env`. |
+
+---
+
+## The config_hash
+
+Every strategy parameter you set is folded into a deterministic `config_hash` at deploy time. Changing any strategy parameter creates a new pinned config hash and therefore a new `AgentInstance`.
+
+This is intentional. Because each config produces a unique sealed identity, Veridex can replay exactly which config caused which actions. Two agents on the same template with different configs are different instances with different hashes — and the leaderboard reflects that.
+
+```
+same config → same config_hash → reproducible replay
+```
+
+---
+
+## Extend with your own strategy
+
+You can add a custom strategy through three documented extension seams:
+
+| Seam | Location | What to implement |
+|---|---|---|
+| **Strategy** | `veridex/strategies/` | Add a new `*.py` file. Implement a `decide(market_state) -> AgentAction` method. Wire it in `veridex_agent/config.py::build_agent`. Your strategy proposes only — the law scores. |
+| **PolicyEnvelope** | `veridex/policy/envelope.py` | Add operator guardrails (stake caps, allowlists, min edge, quote freshness, kill switch). Built from your config by `build_policy_envelope`. |
+| **VenueAdapter** | `veridex/venues/base.py` | Add a new execution surface (quote / submit / status / normalize). Only `ExecutionRunner` may reach `submit_order`, and only after the policy gate passes. |
+
+<Tip>
+Test new configs through replay or backtest mode before promoting to paper or live runs. This gives you a visible performance and policy record before your config reaches real venue submission.
+</Tip>

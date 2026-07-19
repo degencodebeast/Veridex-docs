@@ -1,0 +1,149 @@
+---
+title: "Backtest API: Run Agents Against Sealed ReplayPacks"
+sidebarTitle: "Backtest"
+description: "POST /backtests runs an agent against a content-hashed ReplayPack and returns a BacktestReport with CLV scores, proof checks, and a verifiable run ID."
+---
+
+## Overview
+
+The backtest endpoints let you replay a catalogued `ReplayPack` through the Veridex proof engine and receive a `BacktestReport` with CLV scores, 7 proof checks, and a verifiable `run_id`. The backtest uses the same deterministic runtime as live and arena runs — the mode label is always `"Backtest"` and is never dressed up as a live result.
+
+Packs are addressed by `pack_id` (a stable catalog key), never by a filesystem path. The server resolves the pack server-side against the verified R-2 catalog, so a client cannot point the replay loader at an arbitrary directory.
+
+Both endpoints are publicly accessible — no auth required.
+
+---
+
+## POST /backtests
+
+Run an agent against a catalogued `ReplayPack` and store the resulting `BacktestReport`.
+
+**Auth:** None required.
+
+**Request body:** `BacktestRunRequest`
+
+```json
+{
+  "pack_id": "wc-2022-pack",
+  "fixture_id": 12345,
+  "window_id": "my-window-01",
+  "market_allowlist": ["1X2", "OU"],
+  "end_rule": "pre_match",
+  "duration_s": null,
+  "min_clv_horizon_s": 60
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `pack_id` | `string` | Yes | The R-2 catalog key of the `ReplayPack` to replay. Resolved server-side; unknown values return 404 |
+| `fixture_id` | `integer` | Yes | The fixture within the pack to replay. Must be catalogued for the pack; booleans are rejected (strict integer — `true`/`false` are never coerced to `1`/`0`) |
+| `window_id` | `string` | Yes | Stable identifier for the coverage window; echoed onto the report |
+| `market_allowlist` | `array[string]` | Yes | Market-key prefixes the window scores (the report's `market_universe`) |
+| `end_rule` | `string` | No | Window close rule: `"pre_match"` (default), `"fixed_duration"`, or `"manual_stop"` |
+| `duration_s` | `integer \| null` | No | Required when `end_rule` is `"fixed_duration"`; must be `null` otherwise |
+| `min_clv_horizon_s` | `integer` | No | Pending-horizon guard in seconds; defaults to `60` |
+
+The request body uses `extra="forbid"`: any unknown field (including the legacy removed `pack_dir` field) returns `422`.
+
+**How the backtest runs:**
+
+1. The server resolves `pack_id` against the verified R-2 catalog. An unknown `pack_id` returns `404`; an uncatalogued `fixture_id` for the pack returns `422`.
+2. The server derives the `content_hash` from the verified catalog entry and binds it into the sealed report — the run's replay identity is pinned to the catalog.
+3. The run is driven over a single deterministic offline agent (no LLM, no network).
+4. The sealed report is stored under `backtest_id` for later retrieval.
+
+**Response:** `BacktestRunResponse`
+
+```json
+{
+  "backtest_id": "bt_9a3c...",
+  "mode_label": "Backtest",
+  "run_id": "run_7f2d..."
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `backtest_id` | `string` | Deterministic identifier for the produced report; use with `GET /backtests/{backtest_id}` |
+| `mode_label` | `string` | Always `"Backtest"` on this path (REQ-2D-304 — a replay is never labeled as live) |
+| `run_id` | `string` | The sealed `RunResult` identifier; verify it via `POST /runs/{run_id}/verify` |
+
+**Errors:**
+- `400` — invalid window spec or pack replay failure
+- `404` — `pack_id` is not in the verified catalog
+- `422` — `fixture_id` is not catalogued for the pack, or the request body contains unknown fields
+
+---
+
+## GET /backtests/{backtest_id}
+
+Fetch a stored `BacktestReport` by its identifier.
+
+**Path parameter:** `backtest_id` — returned by `POST /backtests`
+
+**Auth:** None required.
+
+**Response:** `BacktestReport`
+
+The full report contains CLV scores, proof checks, and the bound `content_hash`. The `real_executable_edge_bps` field is always `null` on the backtest path — a backtest replay makes no fillability claim.
+
+**Errors:**
+- `404` — unknown `backtest_id`
+
+---
+
+## GET /replay-packs
+
+List all available hash-verified `ReplayPack` catalog entries.
+
+**Auth:** None required.
+
+**Response:** `ReplayPackListResponse`
+
+```json
+{
+  "packs": [
+    {
+      "pack_id": "wc-2022-pack",
+      "content_hash": "sha256:abc123...",
+      "provenance": "genuine-txline",
+      "is_genuine": true,
+      "fixtures": [12345, 12346, 12347]
+    }
+  ]
+}
+```
+
+Each `ReplayPackInfo` item contains:
+
+| Field | Type | Description |
+|---|---|---|
+| `pack_id` | `string` | The stable catalog key used to reference this pack in backtest requests |
+| `content_hash` | `string` | The pack's verified content hash; recompute-matched at catalog build time |
+| `provenance` | `string` | Honest provenance label: `"genuine-txline"` only for a coherent genuine capture |
+| `is_genuine` | `boolean` | `true` only for a hash-verified, coherent genuine TxLINE capture |
+| `fixtures` | `array[integer]` | The fixture IDs this pack's manifest declares as replayable |
+
+This endpoint lists only packs that the R-2 catalog has already hash-verified and allowlisted. A tampered or unverified pack is excluded at catalog-build time and never appears here. The internal filesystem path (`pack_dir`) is deliberately not surfaced — the browser addresses packs by `pack_id` only.
+
+---
+
+## GET /replay-packs/{pack_id}
+
+Fetch one verified pack's hash, provenance, and fixtures by `pack_id`.
+
+**Path parameter:** `pack_id`
+
+**Auth:** None required.
+
+**Response:** `ReplayPackInfo` (same shape as items in the list above)
+
+**Errors:**
+- `404` — unknown or unverified `pack_id`
+
+---
+
+<Note>
+Raw real-fixture odds from genuine TxLINE captures are not redistributed — licensed data stays local. Synthetic packs are included and self-labeled as synthetic on every surface. Genuine captured packs must be provided by the operator deploying the service.
+</Note>

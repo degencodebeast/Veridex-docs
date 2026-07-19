@@ -1,0 +1,125 @@
+---
+title: "Execution Safety Controls and Policy Guardrails"
+sidebarTitle: "Safety Controls"
+description: "Veridex enforces a two-phase policy gate, circuit breaker, stake caps, and operator-only live arming to keep real-money execution fail-closed."
+---
+
+## The policy envelope
+
+Every Veridex run operates under a **`PolicyEnvelope`** — the operator's committed guardrail set, pinned before the run starts and recorded in the run's `policy_hash`. The envelope specifies:
+
+- `max_stake` — maximum order size per decision
+- `max_stake_live_guarded` — a tighter per-order cap that applies **only** on the live-guarded path
+- `min_edge_bps` — minimum executable edge required to pass the post-quote gate
+- `market_allowlist` — prefix-matched set of market keys the agent may trade
+- `venue_allowlist` — set of venues the agent may access
+- `max_slippage_bps` — maximum tolerated slippage against the sealed reference price
+- `max_price` — maximum acceptable decimal odds
+- `max_quote_age_s` — maximum quote staleness before the post-quote gate rejects it
+- `cooldown_s` — minimum seconds between consecutive orders
+- `circuit_breaker_threshold` — consecutive executed failures that trip the circuit breaker
+- `kill_switch` — immediately denies all execution when set
+
+The `policy_hash` uses the canonical serializer, so the commitment is byte-stable and directly comparable to the rest of the evidence chain.
+
+## The two-phase policy gate
+
+The policy gate splits checks into two phases around the venue quote. This prevents paying venue latency — or revealing intent to a venue — for an order that deterministic policy would kill anyway.
+
+### Phase 1: Pre-quote checks
+
+Before any venue I/O, Veridex checks:
+
+1. **Kill-switch** — if set, deny immediately
+2. **Circuit breaker state** — if the breaker is OPEN, deny with zero venue I/O
+3. **Stake cap** — order size vs `max_stake`
+4. **Live-only stake cap** — order size vs `max_stake_live_guarded` (live-guarded path only)
+5. **Market allowlist** — the proposed market key must match a prefix in the allowlist
+6. **Venue allowlist** — the target venue must be in the allowlist
+7. **Per-run order cap** — total orders this run vs the configured limit
+8. **Cooldown** — time since the last order for this market
+
+A pre-quote denial emits a `phase="pre_quote"` policy result event and skips the venue quote entirely. All failing reason codes are collected — the gate never short-circuits on the first failure.
+
+### Phase 2: Post-quote checks
+
+After fetching a live venue quote, Veridex checks:
+
+1. **Quote staleness** — quote age vs `max_quote_age_s`
+2. **Book-depth liquidity** — `quoted_size < stake` denies (the book cannot fill the proposed size)
+3. **Slippage** — actual slippage against the sealed reference price vs `max_slippage_bps`
+4. **Executable edge** — forward expected value at the actual quoted price, for the exact submitted size, vs `min_edge_bps`
+5. **Max price** — quoted decimal odds vs `max_price`
+
+The executable edge in the post-quote gate is priced at the real quoted price, not an estimated mid. A clean pass at or above `human_approval_threshold` escalates to `REQUIRES_HUMAN` rather than auto-approving.
+
+## The circuit breaker
+
+The circuit breaker is a **pure, immutable state machine** with three states: CLOSED, OPEN, and HALF_OPEN.
+
+- **OPEN state** — denies all execution with **zero venue I/O**. An OPEN breaker prevents the run from making any further venue contact, not just blocking order submission.
+- **Only executed failures trip the circuit breaker** — a policy denial, a dry-run simulated fill, and a human-approval escalation do not count as failures. Only a real attempted venue interaction that fails advances the failure counter.
+- **Recovery** — the breaker transitions from OPEN to HALF_OPEN after a cooldown period (time is always injected, not wall-clock). A successful probe in HALF_OPEN fully closes the breaker; a failed probe returns it to OPEN.
+
+The gate alone reads `breaker.allows()` and mints the `circuit_open` deny reason — the execution runner constructs and threads the breaker cell but never makes circuit-breaker decisions itself. There is exactly one gate authority.
+
+## The live-money conjunction
+
+A real Polymarket order requires **every** gate below to be satisfied simultaneously. Missing any one degrades the run to a dry simulation that records exactly why.
+
+**1. Mode is exactly `live_guarded`**
+
+This is a structural conjunct, not a runtime check. The route selector arms only inside `if execution_mode == LIVE_GUARDED`. Any other mode — paper, dry_run, or any future mode value — falls through to the fake-adapter dry route by construction. No configuration can cause a non-live-guarded mode to place a real order.
+
+**2. Route arm gate: operator-supplied `LiveExecutionDeps` with `live_ready == True`**
+
+An operator must supply an armed adapter bundle. `live_ready` requires two **operator-verified** facts to be explicitly confirmed:
+
+- `neg_risk_approved = True` — the operator has independently confirmed the on-chain neg-risk exchange ERC-1155 approval. This cannot be verified by code; it requires on-chain inspection.
+- `fak_smoke_passed = True` — the operator has run the 1-share FAK smoke (`scripts/polymarket_smoke.py`, gated by `POLYMARKET_SMOKE=yes` and `POLYMARKET_WRITE_ENABLED`) and received a real `LIVE_GUARDED` submit/receipt. A degraded dry-run result counts as a **failed** smoke, not a pass.
+
+A preflight that merely "didn't object" is not consent. `live_ready` is `False` unless both operator checks are explicitly `True`.
+
+**3. Adapter's own lock: `_require_armed`**
+
+Even after the route arm gate approves, the `PolymarketAdapter` independently checks:
+
+- `POLYMARKET_WRITE_ENABLED` is set
+- `dry_run = False`
+- A write client is injected
+
+**The money gate does not trust the routing layer.** Two independent locks must both open.
+
+**4. Run-time guards**
+
+At submission time, all of the following also apply:
+
+- Circuit breaker check (OPEN = deny with zero venue I/O)
+- `max_stake_live_guarded` cap
+- Quote-size coupling (the quoted edge is priced for the exact size that submits — see below)
+- Resolver raises `MarketUnavailable` on any ambiguous or unknown market/side rather than guessing a token
+
+## No HTTP path arms real money
+
+`POST /competitions/{id}/start` passes **no `live_deps` argument** by design. Real-money execution is **operator-direct-only, by construction**: an operator must build the armed adapter and the preflight verdict in code and supply them directly to `start_competition`. No HTTP request, no deployed agent, and no LLM proposal can arm the live path — the arming inputs do not exist on any wire surface.
+
+## Quote-size coupling
+
+The venue quote is priced **for the exact stake size that will submit**. The slippage and executable edge the post-quote gate acts on reflect precisely the size being requested — there is no gap between the size the gate evaluates and the size the order sends. This prevents a scenario where a small test quote passes the gate but a large real order faces different economics.
+
+## Honest degrade with recorded reasons
+
+A configured `live_guarded` run that fails an arming check does not error. It runs as a dry simulation and emits an `EXECUTION_ROUTE` telemetry event recording:
+
+```
+requested_execution_mode: "live_guarded"
+effective_execution_mode: "dry_run"
+degraded_because_not_armed: true
+degrade_reason: <live_ready_false | missing_live_deps | non_real_adapter>
+```
+
+This event is persisted before broadcast and is never sealed — it is operational telemetry, not evidence. You can always read *why* a run went dry from the competition log rather than inferring it from config versus observed behavior.
+
+## Current status
+
+No real Polymarket order has been placed. The live-guarded surface is built, reviewed, and fail-closed. The first 1-share FAK smoke is **deliberately a human operator's decision** — it requires wallet funding, on-chain approvals, explicit env-gated script invocation, and manually setting the operator-verify confirmations into the preflight. See the operator runbook for the complete sequence.

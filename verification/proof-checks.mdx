@@ -1,0 +1,82 @@
+---
+title: "The Seven Veridex Proof Checks Explained"
+sidebarTitle: "Proof Checks"
+description: "Every Veridex run produces seven structural proof checks that recompute from sealed evidence — tamper one byte and the proof goes red."
+---
+
+## What proof checks are
+
+Every Veridex run produces a frozen, 7-member block of proof checks. These checks are **structural and falsifiable**: each one recomputes from sealed evidence and returns `pass`, `fail`, `pending`, or `not_applicable` — never a hardcoded PASS. A check that structurally cannot fail is not a check; every check in Veridex was built so that tampering with the relevant evidence produces a `fail` verdict.
+
+Checks and metrics serve different purposes and are deliberately kept separate:
+
+- **Checks** certify the record: can this run be trusted?
+- **CLV** is the metric that ranks performance: how well did the agent trade?
+
+CLV is never a check ID. Checks are never performance scores. Proof completeness is an eligibility badge — a run in `partial` proof mode is not eligible for leaderboard ranking — but it is not a skill signal.
+
+## The seven checks
+
+| Check ID | What it proves |
+|---|---|
+| `evidence_integrity` | The recomputed `evidence_hash` matches the sealed run-event prefix — no byte was altered |
+| `llm_boundary` | No LLM SDK entered the trust path (import-audited; **fails closed** if a trust directory is missing) |
+| `metrics_recomputed` | CLV and scores re-derived from sealed payloads match persisted scores — tamper a score row and this check fails |
+| `manifest_bound` | The proof manifest binds `run_id`, evidence root, and score root together |
+| `policy_obeyed` | Every execution passed the two-phase policy gate — no decision bypassed the law |
+| `receipt_separation` | Off-chain venue receipts are non-scoring — a receipt can never become proof evidence |
+| `anchor` | The manifest hash is committed to Solana (honest `pending` or `not_applicable` when offline or `anchor=false`) |
+
+## How tamper-evidence works
+
+Three independent enforcement layers make these checks genuinely falsifiable rather than decorative.
+
+### Evidence is sealed before it is scored
+
+`evidence_hash` covers the sealed `run_events` prefix — the ticks, decisions, errors, and (for live windows) the reconstructed closing line. Scores, receipts, and telemetry live outside the hash. Change a sealed input and `evidence_integrity` fails. Alter only a persisted score row while leaving the sealed prefix intact, and `metrics_recomputed` catches it — because that check re-derives scores fresh from the sealed inputs, not from the stored rows.
+
+Veridex tested exactly this: a doctored `clv_bps` value in a persisted score row fails `metrics_recomputed` even when `evidence_integrity` stays green.
+
+### Scores are re-derived, not echoed
+
+`POST /runs/{id}/verify` rebuilds every check fresh from the sealed bytes. It never echoes what is stored. This is what makes verify a genuine recomputation rather than a readback.
+
+To close a coordinated tamper: both the recompute inputs (market snapshots and actions) come only from the sealed `run_events`, so editing a score row alongside its stored inputs is still caught — the check sources its inputs from the hash-protected prefix, not from the mutable store.
+
+### The LLM's claim and the law's score are two separate code paths
+
+The agent's `claimed_edge_bps` is recorded as untrusted metadata. The trust path — `law/`, `scoring.py`, `leaderboard.py`, `verifier/`, `checks/`, `ingest/`, `policy/` — is statically import-audited to contain zero LLM SDK code. The `llm_boundary` check re-runs this audit live. If a forbidden import (`agno`, `anthropic`, `openai`, `google.generativeai`, `litellm`) appears anywhere on the trust path, the check fails. If a trust directory is missing entirely, the audit fails closed rather than passing vacuously.
+
+## The Proof Card
+
+The Proof Card is the UI surface that shows all seven check results with their `pass` / `fail` / `pending` / `not_applicable` status for a given run. You can reach the Proof Card from the Live Cockpit or from any leaderboard run entry, and you can independently recompute its results with `POST /runs/{id}/verify`.
+
+## Proof modes
+
+Every run carries one of three proof modes:
+
+| Mode | Meaning |
+|---|---|
+| `reproducible` | The same strategy code and replayed inputs regenerate identical actions and scores |
+| `verified` | The run was sealed, recomputed, policy-checked, and proof-checked — the LLM is not trusted to reproduce byte-identical behavior, but the record is verifiable from evidence |
+| `partial` | The run was sealed and recomputed, but its proof is incomplete (a required check is `pending` or `not_applicable`, or evidence is missing) |
+
+A `partial` run is shown for transparency but is **not eligible for ranking**. Ranking requires `reproducible` or `verified`.
+
+## Reading the verify response
+
+The top-level `verified: true` field in the verify response reflects **evidence-prefix integrity**: the sealed run-event prefix is intact and all blocking checks passed.
+
+If a blocking check fails — even with an intact evidence seal — the UI renders **"⚠ NOT fully verified"** and the per-check block shows exactly which check failed and why. There is no false green.
+
+The `anchor` check has `info` severity rather than `blocking` severity, so an offline replay's honest `not_applicable` anchor verdict never reads as a blocking failure for an otherwise clean run.
+
+## The hardening history
+
+Three of the seven checks originally could not structurally fail and were fixed during development:
+
+- `llm_boundary` would pass vacuously if a trust directory was deleted — because `rglob` over a missing directory returns nothing, yielding zero forbidden imports. The fix asserts each target directory exists before auditing; a missing directory now raises and fails the check.
+- `metrics_recomputed` originally verified rows against stored inputs that a coordinated tamper could edit alongside the score. The fix sources both recompute inputs — market snapshots and agent actions — exclusively from the hash-protected sealed `run_events`.
+- `manifest_bound`, `policy_obeyed`, and `receipt_separation` were structural placeholders before their real verdict builders were wired. Each now recomputes from its respective slice of the sealed and derived event log.
+
+Every one of these fixes is now a regression test: tampered inputs produce a `fail` verdict, not a `pass`.

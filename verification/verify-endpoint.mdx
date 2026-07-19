@@ -1,0 +1,81 @@
+---
+title: "Verify Any Veridex Run with POST /runs/{id}/verify"
+sidebarTitle: "Verify Endpoint"
+description: "POST /runs/{id}/verify re-runs the deterministic law over sealed evidence and returns per-check verdicts — anyone can independently recompute the proof."
+---
+
+## What the verify endpoint does
+
+`POST /runs/{id}/verify` loads the sealed run from the store and re-runs the deterministic law over the sealed event log. It returns a per-check verdict for all seven proof checks and a top-level `verified` status.
+
+Crucially, verify **recomputes** — it never echoes what is stored. It re-derives every score row fresh from the sealed inputs, rebuilds the score root and manifest through the same helpers the original seal used, and reconstructs all seven checks from scratch. Tamper with one sealed byte and the proof goes red.
+
+This endpoint is the same for deployed agents, arena runs, and backtests. There is one flow to proof.
+
+## Why it matters
+
+Every other "autonomous trading agent" demo asks you to trust a dashboard number. Verify gives you the tools to check the number yourself. The verify endpoint's recomputation is deterministic: the same sealed inputs always produce the same evidence hash, the same scores, and the same manifest hash — regardless of which run minted them. You can re-run it yourself and compare hashes as a genuine third-party verification move.
+
+## How to call it
+
+```bash
+curl -X POST http://localhost:8000/runs/{run_id}/verify
+```
+
+Replace `{run_id}` with the run identifier returned when you deployed your agent or started a competition. No authentication is required.
+
+## Example response
+
+```json
+{
+  "run_id": "bt_cd7e0daa53a0_wc_demo",
+  "verified": true,
+  "checks": {
+    "evidence_integrity": "pass",
+    "llm_boundary": "pass",
+    "metrics_recomputed": "pass",
+    "manifest_bound": "pass",
+    "policy_obeyed": "pass",
+    "receipt_separation": "pass",
+    "anchor": "not_applicable"
+  },
+  "manifest_hash": "...",
+  "evidence_hash": "..."
+}
+```
+
+Each check returns one of `pass`, `fail`, `pending`, or `not_applicable`. The `anchor` check returns `not_applicable` for offline replays and runs configured with `anchor = false`.
+
+## Reading the response
+
+**`verified: true`** means the evidence-prefix integrity is intact and all blocking checks passed. The sealed run-event prefix is byte-for-byte what was originally sealed.
+
+**`"⚠ NOT fully verified"`** renders when a blocking check fails — even if `evidence_integrity` is `pass`. The per-check block tells you exactly which check failed. There is no false green.
+
+The response is deliberately layered this way: top-level `verified` reflects evidence-prefix integrity; the per-check block carries the full verdict. A run can have an intact seal but still fail `metrics_recomputed` if a persisted score row was doctored after sealing — verify catches both.
+
+## What verify recomputes step by step
+
+Under the hood, `verify_run` (`veridex/verifier/recompute.py`) performs the following in sequence:
+
+1. Recomputes `evidence_hash` over the sealed run-event prefix and compares it to the stored hash.
+2. Re-derives all ranked score rows fresh via `score_run` — it never reads the stored rows as truth.
+3. Rebuilds the score root, the Merkle root-forest, and the manifest hash through the same single-source helpers the original seal used.
+4. Rebuilds all seven proof checks from scratch.
+5. Returns a structured report even if the run is malformed or tampered — a bad run yields `verified: false` with the error captured, never a 500 error on the verify endpoint.
+
+## Accessing verify programmatically
+
+The same recomputation is available in Python:
+
+```python
+from veridex.verifier.recompute import verify_run
+
+result = verify_run(sealed_run)
+```
+
+This is the same function the API endpoint calls. The CLI, the SDK, and the demo script all verify through the same path.
+
+## Access and availability
+
+Verify is **publicly available** — no authentication is required to re-prove a run. Deployed agents verify through this same endpoint as arena runs. The demo script (`scripts/demo_phase2d.py --serve`) prints the verify URLs for every run it produces; open them to see the recomputed proof in your browser or via `curl`.

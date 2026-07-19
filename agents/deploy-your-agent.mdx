@@ -1,0 +1,123 @@
+---
+title: "Deploy Your Own Agent into the Veridex Pipeline"
+sidebarTitle: "Deploy Agent"
+description: "Configure a TOML file, run the veridex-agent CLI or Docker container, and receive a sealed verifiable proof using the same pipeline as the Arena."
+---
+
+The `veridex-agent` SDK lets you run your own agent outside the Arena competition container while using the exact same law / policy / proof pipeline that Arena runs use. You configure a strategy in a TOML file, run the CLI or Docker container, and receive a sealed, independently verifiable run proof — anchored on Solana if you supply credentials.
+
+---
+
+## Overview
+
+The `veridex-agent` SDK is the standalone runner seam. It is the same single runner that the Agent Studio deploy endpoint uses — not a separate implementation. Every run your config produces goes through the same trust chain as the Arena:
+
+```
+Agent proposes → Law recomputes → Policy gates → Venue executes → Proof verifies
+```
+
+Your agent's claimed edge is recorded as untrusted metadata. CLV is recomputed from sealed evidence by the deterministic law. You verify any run with `POST /runs/{run_id}/verify`.
+
+---
+
+## Quick start
+
+Install the SDK with the agent, live, and API extras:
+
+```bash
+pip install ".[agent,live,api]"
+```
+
+Run the sample config:
+
+```bash
+veridex-agent run --config veridex_agent/sample_agent.toml
+```
+
+Expected output:
+
+```
+[VERIFIED] run_id=… source=replay avg_clv_bps=… manifest_hash=… anchor=not_anchored
+```
+
+The `[VERIFIED]` prefix means the deterministic law re-ran over the sealed evidence and every required check passed. The `anchor=not_anchored` value is the honest default when `SOLANA_KEYPAIR_PATH` is not set in `veridex/.env`.
+
+---
+
+## Docker deployment
+
+You can also run the agent as a Docker container. Credentials come from `--env-file`, never from the TOML or the image.
+
+```bash
+docker build -f Dockerfile.agent -t veridex-agent .
+docker run --rm --env-file veridex/.env -v "$PWD/agent.toml:/app/agent.toml" veridex-agent
+```
+
+---
+
+## The three extension seams
+
+To add a custom strategy or modify execution behavior, use the three documented extension seams:
+
+<AccordionGroup>
+  <Accordion title="Strategy — veridex/strategies/">
+    Add a new file to `veridex/strategies/` (for example `my_strategy.py`). Implement a `decide(market_state) -> AgentAction` method. Wire the new strategy into `veridex_agent/config.py::build_agent` under a new template key.
+
+    Your strategy is a proposer only. It emits a constrained `AgentAction`; the deterministic law in `veridex/law/recompute.py` recomputes edge and CLV from sealed evidence. A strategy that tries to self-certify its score will be ignored — the law's recompute is the only scored path.
+  </Accordion>
+  <Accordion title="PolicyEnvelope — veridex/policy/envelope.py">
+    The PolicyEnvelope is the operator-defined execution boundary: stake caps, order caps, market and venue allowlists, minimum edge, quote freshness bounds, and the kill switch. It is built from your config by `build_policy_envelope` and sealed into the `AgentInstance` as `policy_hash` at deploy time.
+
+    The two-phase policy gate runs pre-quote (kill switch, stake cap, allowlists, circuit breaker) and post-quote (staleness, slippage, executable edge). Both phases must pass before `ExecutionRunner` can route to a venue.
+  </Accordion>
+  <Accordion title="VenueAdapter — veridex/venues/base.py">
+    The VenueAdapter is the execution surface: `quote`, `submit`, `status`, and `normalize`. Add a new adapter for a new venue by implementing this interface.
+
+    Only `ExecutionRunner` may call `submit_order`, and only after the policy gate passes. An agent can trade; it cannot unguard itself or bypass the policy gate.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Trust boundary
+
+The trust boundary for a deployed agent is identical to the Arena:
+
+1. **The LLM or strategy proposes** — a constrained `AgentAction` with untrusted metadata.
+2. **The law recomputes** — edge and CLV are derived from sealed evidence in `veridex/law/recompute.py`, never from the agent's claimed values.
+3. **The proof binds the evidence hash** — the run manifest is a Merkle root-forest covering event log, scores, receipts, policy, and competition domains.
+4. **The run anchors on Solana** — if `anchor=true` and `SOLANA_KEYPAIR_PATH` is set in `veridex/.env`, the manifest hash is committed as a Solana Memo. If not configured, the anchor check reports `not_anchored` honestly.
+
+The trust path is import-audited to contain zero LLM SDK code. Any model rationale or claimed edge sits in an untrusted metadata block and never enters the evidence hash or the CLV score.
+
+---
+
+## Verifying a run
+
+Verify any run — Arena or deployed agent — with the same endpoint:
+
+```bash
+curl -X POST localhost:8000/runs/{run_id}/verify
+```
+
+The verifier re-runs the deterministic law over the sealed `run_events` prefix and returns a per-check verdict for all seven structural checks. Tamper with one sealed byte and `evidence_integrity` fails. Doctor a persisted score row and `metrics_recomputed` fails.
+
+---
+
+## Solana anchoring
+
+By default, `anchor=false` in `sample_agent.toml`, and runs report `anchor=not_anchored`. This is the honest default — not an error.
+
+To anchor a run on Solana devnet:
+
+1. Set `anchor = true` in your `agent.toml`.
+2. Add `SOLANA_KEYPAIR_PATH` to `veridex/.env` (never to the TOML).
+3. Run as normal. The manifest hash is committed as a Solana Memo transaction; anchoring typically confirms in approximately 1.3 seconds.
+
+<Note>
+`anchor=not_anchored` is honest, not degraded. The run is fully sealed and verifiable from evidence regardless of whether it is anchored. Anchoring adds an on-chain commitment that any third party can check independently.
+</Note>
+
+<Warning>
+`live_guarded` execution requires additional operator steps beyond what is in this guide. The API deliberately passes no live dependencies — real execution is operator-direct-only, by construction. Refer to the Safety Controls documentation before attempting guarded live execution.
+</Warning>

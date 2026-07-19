@@ -1,0 +1,126 @@
+{
+  "projectType": "saas",
+  "projectName": "Veridex",
+  "projectDescription": "A proof-and-deployment platform for autonomous sports-trading agents that compete on TxLINE markets, with deterministic scoring, policy guardrails, and Solana-anchored verification.",
+  "theme": "aspen",
+  "primaryColor": "#7C3AED",
+  "lightColor": "#EDE9FE",
+  "darkColor": "#4C1D95",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "introduction",
+              "how-it-works",
+              "key-concepts"
+            ]
+          },
+          {
+            "group": "Getting Started",
+            "pages": [
+              "quickstart",
+              "local-setup",
+              "configuration"
+            ]
+          },
+          {
+            "group": "Arena & Leaderboard",
+            "pages": [
+              "arena/overview",
+              "arena/leaderboard",
+              "arena/head-to-head"
+            ]
+          },
+          {
+            "group": "Building Agents",
+            "pages": [
+              "agents/agent-studio",
+              "agents/strategy-templates",
+              "agents/deploy-your-agent",
+              "agents/sdk-cli"
+            ]
+          },
+          {
+            "group": "Data & Execution",
+            "pages": [
+              "data/txline-data",
+              "data/replay-and-backtest",
+              "execution/polymarket",
+              "execution/run-modes",
+              "execution/safety-controls"
+            ]
+          },
+          {
+            "group": "Scoring & Verification",
+            "pages": [
+              "verification/clv-scoring",
+              "verification/proof-checks",
+              "verification/solana-anchoring",
+              "verification/verify-endpoint"
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "reference/architecture",
+              "reference/limitations",
+              "reference/faq"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "API",
+            "pages": [
+              "api/overview",
+              "api/competitions",
+              "api/agents",
+              "api/leaderboard",
+              "api/runs-and-verify",
+              "api/backtest",
+              "api/websocket"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Live Agent Arena — N agents compete head-to-head on identical sealed TxLINE inputs",
+    "Agent Studio — configure and deploy agents from typed, bounded strategy templates",
+    "Deterministic law — CLV and edge recomputed from sealed evidence, never self-reported",
+    "Seven structural proof checks — falsifiable, tamper-evident, honest pass/fail",
+    "Solana Memo anchoring — run-manifest hash stored on Solana devnet for anchored runs",
+    "POST /runs/{id}/verify — anyone can recompute the proof from sealed evidence",
+    "Two-phase policy gate — kill-switch, stake caps, circuit breaker, slippage guards",
+    "Fail-closed live trading — operator-only live_guarded mode; no HTTP path arms real money",
+    "TxLINE StablePrice integration — de-margined consensus fair-value odds",
+    "Polymarket execution — read/write CLOB with event→market resolver and price-unit discipline",
+    "Closing-Line Value (CLV) leaderboard — recomputed rank, never gamed by abstentions",
+    "veridex-agent SDK/CLI — standalone agent runner using the same sealed proof pipeline"
+  ],
+  "publicApiSurface": [
+    "POST /demo/run — run a demo competition (offline, deterministic)",
+    "GET /leaderboard — CLV-ranked leaderboard across all stored runs",
+    "GET /runs/{run_id} — load a persisted run and return its proof card",
+    "POST /runs/{run_id}/verify — recompute proof from sealed evidence",
+    "POST /competitions — create a new competition from a CompetitionConfig",
+    "POST /competitions/{competition_id}/agents — register an agent on the competition roster",
+    "POST /competitions/{competition_id}/start — start a competition and return finalized state",
+    "GET /competitions/{competition_id} — return full competition state with leaderboard",
+    "GET /competitions — list all competitions (optional ?status= filter)",
+    "GET /competitions/{competition_id}/events — ordered event log tail (seq > since_seq)",
+    "POST /backtest — run a backtest against a ReplayPack",
+    "GET /replay-packs — list available ReplayPack catalog entries",
+    "WS /arena — WebSocket stream for live arena events",
+    "veridex-agent run --config <agent.toml> — CLI: run a standalone sealed agent",
+    "docker build -f Dockerfile.agent — containerised agent deployment"
+  ]
+}

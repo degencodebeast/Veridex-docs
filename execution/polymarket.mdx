@@ -1,0 +1,59 @@
+---
+title: "Polymarket Execution: CLOB Integration and Safety"
+sidebarTitle: "Polymarket"
+description: "Veridex integrates with the Polymarket CLOB for read and write execution, with an event-to-market resolver, price-unit discipline, and fail-closed guards."
+---
+
+## What the Polymarket integration does
+
+Veridex integrates with the Polymarket Conditional Token CLOB for two purposes: **fetching live quotes** (read path) and **submitting orders** (write path). The read path is available in all non-paper modes; the write path is available only under `live_guarded` mode with all operator arming steps completed.
+
+Market resolution uses the public Gamma API. Order book access and order submission use a vendored, pinned, MIT-licensed Polymarket CLOB client kept in-repo under `veridex/venues/_vendor/polymarket_clob/` — the exact reviewed bytes ship with the repository rather than floating on a pip dependency.
+
+## Read path vs write path
+
+**Read path** — Veridex fetches the order book for the side's token, parses levels tolerantly (malformed or zero-size levels are dropped), walks the ask ladder to a size-weighted average native fill price for the requested stake size, and converts the result to decimal odds exactly once at the venue boundary. An empty, one-sided, or unfillable book degrades honestly: `price=0.0` (the no-price sentinel the edge law treats as no-edge), `size=0.0`, `native_price=None`. The read path never fabricates a midpoint or an estimated price.
+
+**Write path** — Order submission requires `POLYMARKET_WRITE_ENABLED`, `dry_run=False`, and an injected write client — the `_require_armed` triple gate inside the adapter. Even after the route arm gate approves a live order, the adapter applies its own independent lock. Two independent locks must both open before any real order reaches the wire.
+
+## The event→market resolver
+
+The resolver turns a structured market reference — `"1X2|home|full"`, `"1X2|away|full"`, `"1X2|draw|full"`, `"OU|<line>|full"` — into concrete on-chain identifiers. It navigates the live-verified Polymarket market structure: a World Cup fixture slug names an event containing many markets, and 1X2 is three separate binary Yes/No markets ("Will Portugal win…", "…end in a draw?", "Will Croatia win…").
+
+The resolver **fails closed rather than guessing a token**:
+
+- `1X2|home` and `1X2|away` match the "Will \<TEAM\> win…" market by normalized team name (accent-stripped, punctuation-collapsed, alias-mapped), never positionally. Missing team identity fails closed.
+- `1X2|draw` selects the "…end in a draw?" market and flags it `draw_market=True`. A `side="draw"` maps to that market's **YES** token — DRAW = YES on the draw-binary market. Routing `side="draw"` to any other market raises `MarketUnavailable` rather than routing to a wrong YES.
+- An away bet (`1X2|away`) maps to the away-**wins** token (YES on the "Will \<away team\> win…?" market) — not the away-loses token. This distinction matters: the resolver caught a latent side↔token bug during adversarial review, before it could ever touch money.
+- `OU|<line>` matches the numeric line on full-match markets only — half/period totals and single-team totals are excluded by pattern.
+- Zero matches, more than one match, an unknown reference type, an unsupported period, or any malformed field raises `MarketUnavailable`. The resolver never guesses.
+
+## Price-unit discipline
+
+Veridex works in **decimal odds** throughout its trust core. The Polymarket native Conditional Token price (a share price in `(0,1)`) is used as an audit field only.
+
+The quote contract enforces this structurally: `Quote.price` is decimal odds — the executable cost-to-fill for the requested size — and `Quote.native_price` is the venue-native value it was derived from, audit-only. There is no ambiguous `.price` field whose unit depends on the venue. On the write side, the inversion happens exactly once at submit time: `round_to_tick(1/order.price)`.
+
+A native price leaking into `.price` would silently corrupt every downstream edge, slippage, and policy number. The structural split makes that class of bug unrepresentable rather than merely unlikely.
+
+## The `real_venue_quote` field
+
+The `real_venue_quote` flag on a policy result is **earned, not inferred**. It is set from a single explicit class marker, `PROVIDES_REAL_VENUE_QUOTE = True`, that only a genuine real-venue adapter declares. It is never inferred from the presence of a number: the offline `FakeVenueAdapter` returns a perfectly plausible fixed price, and its quotes still read `real_venue_quote: false`.
+
+An edge number renders in the Veridex UI **only when a genuine venue quote backs it** — the gate checks `real_venue_quote === true` AND a non-null `venue_decimal_price` AND a non-null `executable_edge_bps`. Any missing piece means no edge is shown.
+
+## Run-002 venue result
+
+In the Run-002 real-data experiment, the rung-2 venue lane **worked**: it priced **94.7% of the `CumulativeDriftAgent`'s in-scope 1X2 decisions** against time-aligned Polymarket mids under a bounded-staleness bound (15-minute maximum quote age), with a self-verified pinned coverage hash and `venue_source_id`.
+
+The estimated edge result was a near-perfect **monotonic longshot ramp**: **+607 bps** on 0–20% probability outcomes, decaying monotonically to **+33 bps** on 80–100% probability outcomes. This is the fingerprint of a favorite-longshot / de-margin-scale divergence — **not** strategy-specific dislocation. Across the mid-probability haircut bands, the estimated edge went negative (−60 to −117 bps), so the headline number was longshot-driven only.
+
+**Run-002 did not demonstrate executable venue edge.** These are estimated mids, not fills. `real_executable_edge_bps = None`. No profit and no fillability claim.
+
+<Warning>
+Polymarket write execution is **operator-controlled**. The `POST /competitions/{id}/start` HTTP endpoint passes no live dependencies by design — a real order cannot be armed over the API. Real-money execution requires an operator to directly supply an armed `LiveExecutionDeps` bundle to `start_competition`. No HTTP path, no deployed agent, and no agent proposal can arm real-money orders.
+</Warning>
+
+<Note>
+Execution receipts are **structurally non-scoring**. A fill can never become proof evidence. Running the execution lane produces score stacks and evidence blocks byte-identical to not running it — fills have zero causal impact on CLV, checks, or leaderboard rank.
+</Note>

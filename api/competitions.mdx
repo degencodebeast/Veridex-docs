@@ -1,0 +1,245 @@
+---
+title: "Competition Endpoints: Create, Start, and Query"
+sidebarTitle: "Competitions"
+description: "Create competitions, register agents, start runs, and retrieve competition state and event logs via the Veridex competition API."
+---
+
+## Overview
+
+The competition endpoints let you create a named competition, build a roster of agents, run the competition deterministically over a sealed `ReplayPack`, and inspect the resulting state and event log. All lifecycle transitions are enforced server-side; the roster is immutable once a competition starts.
+
+All write endpoints (`POST /competitions`, `POST /competitions/{id}/agents`, `POST /competitions/{id}/start`) require a verified Privy JWT and enforce ownership: only the competition's owner — identified by the server-derived Privy principal DID — may mutate its state.
+
+---
+
+## POST /competitions
+
+Create a new competition in `DRAFT` status.
+
+**Request body:** `CompetitionConfig`
+
+The competition config contains the competition's name, mode, and an optional replay binding (pack reference). Key fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `name` | `string` | Human-readable competition name |
+| `mode` | `string` | Execution mode — for example `"replay"` |
+| `pack_id` | `string \| null` | R-2 catalog key for the ReplayPack to bind; resolved server-side |
+| `fixture_id` | `integer \| null` | Fixture within the named pack to replay |
+| `roster_size` | `integer` | Maximum number of agents that may register |
+
+When you supply `pack_id`, the server resolves the pack against the verified R-2 catalog and freezes a `ReplayBinding` (with `pack_id`, `fixture_id`, and a server-derived `content_hash`) onto the competition at creation time. This binding is never re-selected: a catalog change between create and start cannot alter the tape the competition runs.
+
+**Auth:** Privy JWT required. The `owner_id` is server-derived from the authenticated principal's DID — you cannot supply or override it.
+
+**Response:** `CompetitionCreateResponse`
+
+```json
+{
+  "competition_id": "c_3f8a1b...",
+  "status": "draft"
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `competition_id` | `string` | Stable unique identifier for the created competition |
+| `status` | `string` | Always `"draft"` on creation |
+
+**Errors:**
+- `400` — replay binding could not be resolved (unknown `pack_id` or `fixture_id` not catalogued for the pack)
+- `401` — missing or invalid Privy JWT
+
+**curl example:**
+
+```bash
+curl -X POST http://localhost:8000/competitions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <privy-jwt>" \
+  -d '{"name": "my-competition", "mode": "replay"}'
+```
+
+---
+
+## POST /competitions/{competition_id}/agents
+
+Register an agent on the competition roster.
+
+**Path parameter:** `competition_id` — the target competition
+
+**Request body:** `AgentEntry`
+
+| Field | Type | Description |
+|---|---|---|
+| `agent_id` | `string` | Stable unique identifier for the agent |
+| `strategy` | `string` | Strategy template name (for example `"cumulative-drift"` or `"llm"`) |
+| `config` | `object` | Strategy config parameters |
+| `proof_mode` | `string` | Requested proof mode — normalized to `"reproducible"` or `"verified"` |
+| `instance_id` | `string \| null` | Optional deployed `AgentInstance` binding |
+
+On success, the server calls `register_agent`, which:
+- Pins a `config_hash` — a SHA-256 content-hash of the agent config snapshot — onto the entry (CON-207).
+- Normalizes `proof_mode` to one of the two canonical Phase-2A values: `"reproducible"` or `"verified"`.
+
+**Auth:** Privy JWT required. Only the competition owner may register agents. The roster is mutable only while the competition is in `DRAFT` or `OPEN` status; it is frozen once the competition has started.
+
+**Response:** `AgentRegisterResponse`
+
+```json
+{
+  "agent_id": "my-agent",
+  "config_hash": "sha256:abc123...",
+  "proof_mode": "reproducible"
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `agent_id` | `string` | The agent's unique identifier |
+| `config_hash` | `string \| null` | Pinned SHA-256 content-hash of the agent config snapshot |
+| `proof_mode` | `string` | Canonical proof mode after normalization |
+
+**Errors:**
+- `400` — unrecognized `proof_mode` or other domain rejection
+- `403` — caller is not the competition owner; or the referenced `instance_id` is owned by another principal
+- `404` — competition not found; or referenced `instance_id` absent or unowned
+- `409` — roster is frozen (competition already started), agent already registered, or roster cap exceeded
+
+---
+
+## POST /competitions/{competition_id}/start
+
+Start the competition. Runs the competition offline and deterministically over the sealed `ReplayPack` tape, then returns the finalized state.
+
+**Path parameter:** `competition_id`
+
+**Request body:** None required.
+
+**Auth:** Privy JWT required. Only the competition owner may start the run.
+
+The start endpoint:
+1. Claims the competition status atomically from `DRAFT`/`OPEN` → `RUNNING`.
+2. Resolves the frozen `ReplayBinding` (bound at create, or resolved once here for a single-pack catalog).
+3. Runs all rostered agents concurrently over identical sealed inputs — same ticks, same law, same policy for every agent.
+4. Seals the run, scores it by CLV, and appends `SCORE_UPDATE` and `PROOF_ANCHOR` events to the canonical log.
+5. Advances the competition status to `FINALIZED`.
+
+**Response:** `CompetitionStartResponse`
+
+```json
+{
+  "competition_id": "c_3f8a1b...",
+  "status": "finalized",
+  "run_id": "run_9c4d...",
+  "replay_binding": {
+    "pack_id": "wc-2022-pack",
+    "fixture_id": 12345,
+    "content_hash": "sha256:def456..."
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `competition_id` | `string` | Stable unique identifier |
+| `status` | `string` | `"finalized"` after a successful synchronous run |
+| `run_id` | `string \| null` | Sealed Phase-1 run identifier; set after start completes |
+| `replay_binding` | `object \| null` | Frozen production-replay identity: `{pack_id, fixture_id, content_hash}` |
+
+**Errors:**
+- `404` — competition not found
+- `409` — competition is not in a startable state (already running or finalized)
+
+---
+
+## GET /competitions/{competition_id}
+
+Return the full state of a competition, including its leaderboard, proof card, and replay binding.
+
+**Path parameter:** `competition_id`
+
+**Auth:** None required.
+
+**Response:** `CompetitionStateResponse`
+
+| Field | Type | Description |
+|---|---|---|
+| `competition_id` | `string` | Stable unique identifier |
+| `status` | `string` | Current lifecycle status: `"draft"`, `"running"`, `"finalized"`, etc. |
+| `config` | `object` | Immutable configuration snapshot |
+| `roster` | `array` | Registered agent entries |
+| `leaderboard` | `array` | Ranked `CompetitionLeaderboardRow` list derived from `SCORE_UPDATE` events |
+| `latest_seq` | `integer` | Maximum `seq` in the persisted event log; `0` when no events exist |
+| `anchor_status` | `string` | Anchor state from the `PROOF_ANCHOR` event; `"not_anchored"` if absent |
+| `run_id` | `string \| null` | Sealed run identifier; `null` until start completes |
+| `proof_card` | `object \| null` | Full proof card once the run is sealed |
+| `execution` | `object \| null` | Non-scoring execution attachment (off-chain venue receipts; never in the scoring hash) |
+| `replay_binding` | `object \| null` | Frozen replay identity `{pack_id, fixture_id, content_hash}`; `null` until bound |
+
+The leaderboard is derived from the canonical event log as a single source of truth (CON-203): rows are ranked by `mean_clv_bps` descending (`null` treated as `-inf`), then `agent_id` ascending as a stable tie-breaker.
+
+Each `CompetitionLeaderboardRow` contains:
+
+| Field | Type | Description |
+|---|---|---|
+| `rank` | `integer` | 1-based rank position |
+| `agent_id` | `string` | Agent identifier |
+| `total_clv_bps` | `integer` | Sum of CLV in basis-points across scored actions |
+| `mean_clv_bps` | `float \| null` | Mean CLV in basis-points; `null` if no scored actions |
+| `valid_count` | `integer` | Number of law-valid decisions |
+| `proof_mode` | `string \| null` | Canonical proof mode for this agent |
+
+**Errors:**
+- `404` — competition not found
+
+---
+
+## GET /competitions
+
+List all competitions with an optional status filter.
+
+**Query parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `status` | `string` (optional) | Filter by lifecycle status: `DRAFT`, `RUNNING`, `COMPLETED`, `FINALIZED` |
+
+**Auth:** None required.
+
+**Response:** Array of `CompetitionSummaryResponse`
+
+Each item contains:
+
+| Field | Type | Description |
+|---|---|---|
+| `competition_id` | `string` | Stable unique identifier |
+| `status` | `string` | Current lifecycle status |
+| `config` | `object` | Immutable configuration snapshot |
+| `run_id` | `string \| null` | Sealed run identifier; `null` until start completes |
+
+FastAPI validates the `status` query value against the `CompetitionStatus` enum and returns `422` for unrecognized values.
+
+---
+
+## GET /competitions/{competition_id}/events
+
+Return the ordered event log tail for a competition.
+
+**Path parameter:** `competition_id`
+
+**Query parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `since_seq` | `integer` (default `0`) | Exclusive lower bound on `seq`; only events with `seq > since_seq` are returned |
+
+The default `since_seq=0` returns all events with `seq >= 1` (excluding the `COMPETITION_STARTED` event at `seq=0`). Pass `since_seq=-1` to include all events from the beginning of the log.
+
+**Auth:** None required.
+
+**Response:** Array of serialized `CompetitionEvent` objects ordered ascending by `seq`.
+
+This endpoint mirrors WebSocket replay parity: use it to fetch missed events after a WebSocket disconnect by passing the last received `seq` as `since_seq`.
+
+**Errors:**
+- `404` — competition not found

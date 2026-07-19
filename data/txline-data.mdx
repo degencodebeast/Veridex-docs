@@ -1,0 +1,60 @@
+---
+title: "TxLINE Live and Historical Odds Data in Veridex"
+sidebarTitle: "TxLINE Data"
+description: "Veridex ingests TxLINE StablePrice de-margined consensus odds via live SSE streams and historical fixture updates for replay and backtest."
+---
+
+## What TxLINE StablePrice provides
+
+TxLINE's StablePrice feed delivers **de-margined consensus odds** — outcome probabilities that sum to approximately 100%. This means the market's bookmaker margin has already been removed, producing a clean fair-value signal anchored to consensus across multiple books.
+
+Veridex verified this live: StablePrice odds are de-margined consensus with probabilities summing to ~100%, making them the correct fair-value input for closing-line value (CLV) scoring. Because the feed is already de-vigged, Veridex **never re-de-vigs** the probabilities — applying a second margin removal to an already-fair probability would manufacture phantom edge.
+
+Concretely, StablePrice `Pct` values arrive as de-margined consensus probabilities in basis points (`stable_prob_bps`), and decimal odds are extracted from TxLINE `Prices` (divided by 1000). Both quantities are produced by a single normalizer that runs identically for live and replay data — the live feed and ReplayPacks share the same projection.
+
+## The two data paths
+
+Veridex uses TxLINE data through two distinct paths depending on the run mode.
+
+**Live SSE stream** — For live agents and the live-window runner, Veridex connects to `GET /api/odds/stream` as a Server-Sent Events feed. The stream delivers real-time StablePrice odds movements, which the live runner ingests tick by tick as they arrive. Ticks are never buffered and re-replayed; the live runner processes each tick in real time. An async recorder can capture the raw stream to a session directory for later ReplayPack creation.
+
+**Historical odds updates for replay and backtest** — For ReplayPacks and backtests, Veridex uses `GET /api/odds/updates/{fixtureId}` to retrieve the full odds movement history for a finished fixture in a single call. This endpoint returned the entire pre-match-through-in-play update history — tens of thousands of updates spanning multiple days — for the World Cup fixtures used in the real-data experiment (65,156 StablePrice updates for USA v Bosnia alone). This history is the backbone of both closing-line reconstruction and the sealed real-fixture backtest.
+
+## TxLINE endpoints Veridex uses
+
+| Endpoint | Usage |
+|---|---|
+| `POST /auth/guest/start` | Guest JWT mint/refresh |
+| `POST /api/token/activate` | Activates API token after on-chain devnet subscription |
+| `GET /api/fixtures/sports/competitions` | Fixture bundle (IDs, kickoffs, team identities) |
+| `GET /api/odds/stream` (SSE) | Live StablePrice odds into the live runner/recorder |
+| `GET /api/odds/updates/{fixtureId}` | Full odds movement history for a fixture (backbone of ReplayPacks) |
+| `GET /api/odds/snapshot/{fixtureId}?asOf=` | Point-in-time odds (closing-line reconstruction) |
+| `GET /api/odds/validation` | Merkle proof of an odds message (data-integrity probe) |
+| `GET /api/scores/stream` (SSE) / `GET /api/scores/updates/{fixtureId}` | Live/updated scores for closing-line semantics |
+
+## What StablePrice means in practice
+
+CLV is computed entirely within the StablePrice probability space: entry `stable_prob_bps` for the chosen side versus closing `stable_prob_bps` for the same side. Because the feed is already de-margined, bookmaker margin never contaminates the skill metric. The same fair probability also serves as the EV input for forward executable edge at a venue price, keeping the entire quantitative vocabulary anchored to one consensus fair-value source.
+
+Veridex confirmed this empirically during the real-data experiment: the outcome probabilities for scored markets summed to approximately 100%, confirming the de-margined consensus property that CLV scoring relies on.
+
+## On-chain subscription
+
+Live TxLINE data access requires an **on-chain devnet subscription**. The auth flow is a three-step sequence:
+
+1. `POST /auth/guest/start` mints an IP-bound guest JWT.
+2. An on-chain `subscribe()` transaction is sent on Solana devnet — a real signed transaction built from a typed-config keypair. The devnet transaction signature is publicly checkable on the Solana explorer.
+3. `POST /api/token/activate` exchanges the JWT and subscribe signature for the `X-Api-Token` used on all data calls.
+
+The on-chain `subscribe` transaction is part of the Veridex proof record. The devnet anchor confirmation measured at approximately 1.3 seconds in live testing.
+
+## Data integrity
+
+Veridex probes TxLINE's Merkle validation endpoint (`GET /api/odds/validation`) to verify that sealed odds inputs are authentic TxLINE data. In the real-data experiment, **269 of 270 sampled World Cup odds returned valid Merkle inclusion proofs**. This means the law recompute proves the math is faithful to the sealed inputs, and the Merkle check proves those sealed inputs are genuine TxLINE data — not values Veridex edited or fabricated.
+
+One sampled odds record did not return a valid proof, which is reported honestly rather than concealed. The validation endpoint uses `validateOdds`, never `validateStat`, and an unknown evidence kind raises an error rather than mislabeling the proof type.
+
+<Note>
+Raw vendor odds from real fixtures are not redistributed — TxLINE data is licensed. What Veridex ships is the sealed pipeline, the proof discipline, and the ReplayPack mechanics. The real-fixture pipeline ran against local copies of the licensed data during the World Cup experiment.
+</Note>

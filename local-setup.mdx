@@ -1,0 +1,131 @@
+---
+title: "Set Up Veridex Locally for Development"
+sidebarTitle: "Local Setup"
+description: "Install Veridex backend, configure the database, and start the API server and Next.js frontend on your local machine."
+---
+
+This guide walks you through a full local development environment: the Python backend, the FastAPI proof API, the Next.js frontend, the test suite, and the optional Docker agent container.
+
+---
+
+## Backend
+
+### Requirements
+
+- **Python 3.11+** — check with `python --version`
+- **git**
+
+### Install
+
+Create a virtual environment from the repository root (`veridex-arena/`) and install all extras:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -e ".[api,agent,live]"
+```
+
+The extras bundle the components you need for local development:
+
+| Extra | What it adds |
+|---|---|
+| `api` | FastAPI, uvicorn, and the proof API surface |
+| `agent` | The `veridex-agent` CLI and standalone agent runner |
+| `live` | The TxLINE SSE client and live-feed dependencies |
+
+<Tip>
+If you prefer `uv`, the repository ships a `uv.lock`. Run `uv sync --extra api` (or `uv sync --all-extras` for the full set) and prefix subsequent commands with `uv run` instead of activating the venv.
+</Tip>
+
+### Start the API server
+
+```bash
+uvicorn veridex.api.router:app --reload
+```
+
+The API binds to `http://localhost:8000` by default. `--reload` enables hot-reloading during development. Key endpoints include:
+
+- `POST /demo/run` — runs agents, seals, scores, and anchors a demo competition
+- `GET /leaderboard` — returns CLV-ranked results
+- `POST /runs/{run_id}/verify` — recomputes the proof from sealed evidence
+
+To change the bind address or port, set `HOST` and `PORT` in `veridex/.env` (see [Configuration](/configuration)).
+
+### Database (optional for local dev)
+
+By default, with no `DATABASE_URL` set, Veridex uses an in-memory store — state is lost on restart, but the full proof pipeline works without a database. To persist agent instances and run history across restarts, set `DATABASE_URL` in `veridex/.env` to a reachable Postgres connection string:
+
+```
+DATABASE_URL=postgresql://user:password@host:5432/veridex
+```
+
+<Warning>
+If `DATABASE_URL` is set but the database is unreachable, Veridex **fails closed at startup** — it never silently falls back to the in-memory store. Only leave `DATABASE_URL` unset (not set-to-wrong) to use in-memory mode.
+</Warning>
+
+---
+
+## Frontend
+
+### Requirements
+
+- **Node.js** (LTS recommended)
+- **pnpm**
+
+### Install and start
+
+```bash
+cd apps/web && pnpm install && pnpm dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) in your browser. The web app expects the API to be running at the URL specified by `NEXT_PUBLIC_API_BASE` in `apps/web/.env.local`. For local development this is typically `http://localhost:8000`.
+
+The frontend provides the full product surface: Agent Studio, Live Cockpit, Decision Inspector, Proof Card, Leaderboard, Operator Dashboard, and Head-to-Head Duel.
+
+---
+
+## Test Suite
+
+```bash
+pytest -q
+```
+
+This runs 1,000+ backend tests, all fully offline and deterministic. The suite includes:
+
+- A **byte-for-byte golden seal suite** that guards the sealed path — every refactor since the baseline has left the sealed bytes provably identical.
+- A **trust-path import audit** asserting zero LLM SDK imports in the law, checks, scoring, verifier, and policy code paths.
+- **Adversarial tamper tests** — for example, doctoring a persisted `clv_bps` row correctly triggers a `metrics_recomputed` failure.
+
+No credentials, database, wallet, or network access are needed to run the full suite.
+
+---
+
+## Docker (Agent Container)
+
+To build and run the standalone agent container:
+
+```bash
+docker build -f Dockerfile.agent -t veridex-agent .
+docker run --rm --env-file veridex/.env -v "$PWD/agent.toml:/app/agent.toml" veridex-agent
+```
+
+The container uses the same single runner seam as the deploy endpoint. Pass credentials at runtime via `--env-file` — never bake secrets into the image.
+
+---
+
+## What Works Offline vs. What Requires Credentials
+
+| Feature | Offline (no credentials) | Requires credentials |
+|---|---|---|
+| `pytest -q` — full test suite | ✅ | — |
+| Demo script (`demo_phase2d.py`) | ✅ | — |
+| Proof verify endpoint (`POST /runs/{id}/verify`) | ✅ | — |
+| Agent Studio deploy (replay mode) | ✅ | — |
+| Web UI (`pnpm dev`) | ✅ | — |
+| Live TxLINE odds feed | ❌ | `JWT`, `TXLINE_X_API_TOKEN` |
+| Solana Memo anchoring | ❌ | `SOLANA_KEYPAIR_PATH` |
+| Polymarket execution | ❌ | Operator arming + venue keys |
+| Durable Postgres store | ❌ | `DATABASE_URL` |
+| Privy token auth | ❌ | `PRIVY_APP_ID`, `PRIVY_VERIFICATION_KEY` |
+
+See the [Configuration](/configuration) page for the full list of environment variables and how to set them.

@@ -1,0 +1,158 @@
+---
+title: "Run Retrieval and Proof Verification API"
+sidebarTitle: "Runs & Verify"
+description: "GET /runs/{id} returns a run's proof card. POST /runs/{id}/verify recomputes the proof from sealed evidence and returns per-check verdicts."
+---
+
+## Overview
+
+Every competition run, backtest, and deployed agent run produces a sealed result persisted to the store. Two endpoints let you inspect and independently verify that result:
+
+- `GET /runs/{run_id}` returns the assembled proof card.
+- `POST /runs/{run_id}/verify` re-runs the deterministic law over the sealed event log and returns per-check verdicts.
+
+Both endpoints are publicly accessible — no auth required.
+
+---
+
+## GET /runs/{run_id}
+
+Return the proof card for a previously persisted run.
+
+**Path parameter:** `run_id` — the run identifier returned by `POST /demo/run`, `POST /competitions/{id}/start`, or `POST /agents/deploy`.
+
+**Auth:** None required.
+
+**Response:** `ProofArtifactResponse`
+
+The proof card assembles the full artifact bundle a verifier needs to inspect a run:
+
+| Field | Type | Description |
+|---|---|---|
+| `verifier_version` | `string` | Version tag for the proof schema |
+| `run` | `object` | Run metadata: `run_id`, source mode, timestamps |
+| `lineage` | `object` | Lineage block: template name, config hash, policy hash, agent identities |
+| `evidence` | `object` | Evidence block: `evidence_hash` (sealed run-events prefix hash), `manifest_hash` |
+| `checks` | `object` | The 7 `CheckId` block — one verdict per check (see below) |
+| `anchor` | `object` | Anchor block: `status`, `signature`, `cluster`, `explorer_url` |
+| `metrics` | `object \| null` | Performance metrics block: CLV scores live here (SEC-001 — never in `checks`) |
+
+**Errors:**
+- `404` — unknown `run_id`
+
+---
+
+## POST /runs/{run_id}/verify
+
+Re-run the deterministic law over the sealed event log and return the authoritative per-check verification result.
+
+**Path parameter:** `run_id`
+
+**Auth:** None required.
+
+**What verify does:**
+
+The verifier (`veridex.verifier.recompute.verify_run`) recomputes the `evidence_hash` over the sealed `run_events` prefix, re-derives the score root, and rebuilds the run manifest so the `manifest_hash` is byte-identical to the anchored Solana Memo payload — receipt-independent and read-only over the seal. It then rebuilds all 7 proof checks fresh from the recomputed data.
+
+**Response:** `VerifyResponse`
+
+```json
+{
+  "run_id": "bt_cd7e0daa53a0_wc_demo",
+  "verified": true,
+  "evidence_hash": "sha256:aabbcc...",
+  "recomputed_evidence_hash": "sha256:aabbcc...",
+  "manifest_hash": "sha256:112233...",
+  "checks": {
+    "evidence_integrity": "pass",
+    "llm_boundary": "pass",
+    "metrics_recomputed": "pass",
+    "manifest_bound": "pass",
+    "policy_obeyed": "pass",
+    "receipt_separation": "pass",
+    "anchor": "not_applicable"
+  },
+  "metrics": {
+    "avg_clv_bps": 61.19,
+    "valid_count": 80
+  },
+  "anchor": {
+    "status": "not_anchored",
+    "signature": null,
+    "cluster": "devnet",
+    "explorer_url": null
+  },
+  "proof_card": { ... }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `run_id` | `string` | The run that was verified |
+| `verified` | `boolean` | `true` iff the recomputed `evidence_hash` matches the sealed one |
+| `evidence_hash` | `string` | The sealed evidence hash stored at run time |
+| `recomputed_evidence_hash` | `string` | The evidence hash recomputed fresh from sealed bytes; matches `evidence_hash` on a clean run |
+| `manifest_hash` | `string` | The run manifest hash (byte-identical to the Solana Memo anchor payload when anchored) |
+| `checks` | `object` | Per-check verdicts (see below) |
+| `metrics` | `object \| null` | Performance metrics — CLV scores live here, never in `checks` |
+| `anchor` | `object` | Anchor block with `status`, `signature`, `cluster`, and `explorer_url` |
+| `proof_card` | `object` | Full proof card assembled with the recomputed checks and anchor |
+
+### The 7 proof checks
+
+The `checks` block contains exactly 7 keys. Each returns `"pass"`, `"fail"`, `"pending"`, or `"not_applicable"` — never a hardcoded pass, always recomputed from sealed evidence.
+
+| Check | What it proves |
+|---|---|
+| `evidence_integrity` | The recomputed `evidence_hash` matches the sealed run-events prefix — no byte was altered |
+| `llm_boundary` | No LLM SDK entered the trust path (import-audited; fails closed if a trust directory is missing) |
+| `metrics_recomputed` | CLV scores re-derived from the sealed payloads match the persisted scores — tamper a score row and this fails |
+| `manifest_bound` | The proof manifest binds `run_id`, evidence root, and score root together |
+| `policy_obeyed` | Every execution passed the two-phase policy gate — no decision bypassed the law |
+| `receipt_separation` | Off-chain venue receipts are non-scoring — a receipt can never become proof evidence |
+| `anchor` | The manifest hash is committed to Solana; `"pending"` or `"not_applicable"` when offline |
+
+### What `verified: true` means
+
+`verified: true` means the recomputed `evidence_hash` matches the sealed one — no byte in the sealed event-log prefix was altered since the run completed. The per-check block carries the full verdict: `"⚠ NOT fully verified"` renders in the frontend when a blocking check fails even with an intact seal. There is no false green.
+
+If a recompute error occurs (for example, a corrupted event log), `recomputed_evidence_hash` is set to `"recompute_error:<reason>"` and `verified` is `false`.
+
+### curl example
+
+```bash
+curl -X POST http://localhost:8000/runs/bt_cd7e0daa53a0_wc_demo/verify
+```
+
+**Errors:**
+- `404` — unknown `run_id`
+
+---
+
+## GET /runs/{run_id}/actions/{seq}
+
+Return a per-action forensic record for one sealed decision. This is the data source for the Decision Inspector in the frontend.
+
+**Path parameters:**
+- `run_id` — the sealed run
+- `seq` — the decision event's `sequence_no` in the run's event log
+
+**Auth:** None required.
+
+**Response:** `InspectorRecord`
+
+| Field | Type | Description |
+|---|---|---|
+| `run_id` | `string` | The sealed run identifier |
+| `agent_id` | `string` | The agent that produced this decision |
+| `tick_seq` | `integer` | The tick sequence number at which the decision was made |
+| `market_state` | `object` | The entry market state snapshot from the sealed event log |
+| `agent_action` | `object` | The agent's proposed action |
+| `recompute` | `object` | Law-recomputed `recomputed_edge_bps`, `clv_bps`, and `valid` flag |
+| `clv_bps` | `integer \| string` | Law-recomputed CLV; `"pending"` for a valid WAIT/abstention |
+| `untrusted_llm_metadata` | `object` | `reason`, `confidence`, `claimed_edge_bps` — recorded but NEVER scored (fenced in the UI as "NOT AN INPUT TO SCORE") |
+
+The `clv_bps` in `recompute` is always read from the law's sealed score row — never from the agent's `claimed_edge_bps`. These are structurally separate code paths with no flow between them.
+
+**Errors:**
+- `404` — unknown `run_id`, or no decision event at the given `seq`

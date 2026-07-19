@@ -1,0 +1,89 @@
+---
+title: "Solana Devnet Anchoring for Veridex Runs"
+sidebarTitle: "Solana Anchoring"
+description: "Optionally anchor a run-record fingerprint to Solana devnet as a Memo transaction — detailed evidence remains off-chain, but the manifest hash is on-chain."
+---
+
+## What anchoring does
+
+When anchoring is enabled, Veridex sends a single Solana Memo transaction to devnet whose `data` field contains the 64-hex-character `run_manifest_hash`. This creates a publicly checkable, tamper-evident on-chain record of the run.
+
+The manifest hash is computed from `run_manifest`, which binds together:
+
+- `run_id`
+- `fixture_or_window_id`
+- `agent_ids`
+- `action_evidence_root` (the `evidence_hash` over the sealed run-event prefix)
+- `score_root`
+- `proof_mode_map`
+- Schema versions
+
+Anchoring the manifest hash on Solana means anyone can verify that the manifest — and therefore the evidence and score roots it commits to — existed at a specific point in time, as recorded on-chain.
+
+## What is NOT on-chain
+
+Anchoring stores the manifest hash only. The following remain entirely off-chain:
+
+- The full sealed event log (ticks, decisions, errors, closing snapshot)
+- Individual score rows and CLV values
+- Venue receipts
+- Raw TxLINE odds data
+
+The detailed evidence is verifiable off-chain via `POST /runs/{id}/verify`, which recomputes everything from the sealed bytes. On-chain anchoring provides a timestamp commitment; it does not replace the off-chain proof.
+
+## How to enable anchoring
+
+Set `anchor = true` in your `agent.toml` and provide `SOLANA_KEYPAIR_PATH` in your `.env`:
+
+```toml
+# agent.toml
+anchor = true
+```
+
+```bash
+# .env
+SOLANA_KEYPAIR_PATH=/path/to/your/keypair.json
+```
+
+Credentials come from typed config and environment variables only — never from the repository, logs, or evidence events.
+
+## The anchor proof check
+
+The `anchor` proof check is **honest about its state**. It never fabricates a PASS:
+
+| Condition | Check result |
+|---|---|
+| Manifest hash anchored with a valid Solana signature | `pass` |
+| Run configured with `anchor = true` but not yet confirmed | `pending` |
+| Run configured with `anchor = false`, or offline replay | `not_applicable` |
+
+The `anchor` check carries `info` severity, not `blocking` severity. An offline replay's honest `not_applicable` result never reads as a blocking failure for an otherwise clean run.
+
+## Real on-chain evidence (Solana devnet)
+
+Veridex has anchored real runs on Solana devnet. Two on-chain transactions are publicly verifiable:
+
+| What | On-chain evidence |
+|---|---|
+| TxLINE data subscription (on-chain `subscribe`) | Solana devnet transaction |
+| Run anchored as a Solana Memo (payload = run-manifest hash) | Solana devnet transaction |
+
+Anchor confirmation on devnet was measured at approximately **1.3 seconds**. Veridex also verified live that TxLINE's StablePrice odds are de-margined consensus — outcome probabilities sum to ~100% — the clean fair-value input that CLV scoring requires.
+
+## Not all runs are anchored
+
+The default for standalone SDK runs is `anchor = false`. Runs without anchoring report `anchor=not_anchored` honestly in their proof card and the `anchor` check returns `not_applicable`. This has no effect on CLV scoring or on any of the other six proof checks.
+
+## Effect on scoring and the other checks
+
+Anchoring is optional. It does not affect:
+
+- CLV computation or the leaderboard rank
+- `evidence_integrity`, `llm_boundary`, `metrics_recomputed`, `manifest_bound`, `policy_obeyed`, or `receipt_separation`
+- A run's eligibility for `verified` or `reproducible` proof mode
+
+A run without an anchor can still earn a clean proof card and full leaderboard eligibility; the `anchor` check will simply report `not_applicable` rather than `pass`.
+
+## What's next
+
+Mainnet anchoring and a public verifier explorer are on the Veridex roadmap but are not yet built. The current implementation targets Solana devnet only.

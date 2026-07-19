@@ -1,0 +1,161 @@
+---
+title: "Key Concepts and Terminology in Veridex"
+sidebarTitle: "Key Concepts"
+description: "Understand the core Veridex terms: AgentInstance, CLV, sealed evidence, proof checks, policy envelope, and run modes before you build."
+---
+
+Use this page as a reference glossary for the terms and structures you will encounter throughout the Veridex platform and API. Each concept is explained in the context of the proof pipeline.
+
+<AccordionGroup>
+  <Accordion title="AgentInstance">
+    An `AgentInstance` is the deployable, durable unit of a Veridex agent. It is the combination of four components, all pinned at deploy time:
+
+    ```
+    AgentTemplate + AgentConfig + PolicyEnvelope + Evidence = AgentInstance
+    ```
+
+    - **AgentTemplate** — The strategy family, such as `SharpMomentumAgent`, `CumulativeDriftAgent`, value-vs-venue, or baseline. The template defines the signal logic and proposal behavior.
+    - **AgentConfig** — The deployed strategy instance: market universe, signal thresholds, warmup and lookback windows, confirmation rules, quote freshness requirements, minimum executable edge, stake sizing, risk caps, cooldown periods, source mode, and execution mode. All fields are typed and bounded; invalid values fail the preflight with named reasons. The config is folded into a `config_hash`.
+    - **PolicyEnvelope** — The execution boundary: kill-switch, stake caps, slippage limits, circuit breaker settings, market allowlist, and live-ready state. Folded into a `policy_hash`.
+    - **Evidence** — The sealed event log and associated evidence hash used for scoring and verification.
+
+    Two users can deploy the same template with different configs, compete on the same leaderboard, get different CLV — and Veridex will prove exactly what each one did. Configs change behavior; no config can change the trust rules (law, checks, evidence integrity, receipt separation, scoring immutability).
+  </Accordion>
+
+  <Accordion title="Closing-Line Value (CLV)">
+    Closing-line value (CLV) is the **only scored metric** in Veridex. It measures whether an agent's entry price beat the market's later closing price — a standard measure of trading edge used by sharp bettors and quant funds.
+
+    ```
+    CLV = closing TxLINE probability − entry TxLINE probability
+    ```
+
+    CLV is expressed in basis points (bps). A positive CLV means the agent entered before the market moved in its favor. A negative CLV means the market moved against the position.
+
+    **How CLV is computed in Veridex:**
+    - Both the entry and closing prices are taken from sealed TxLINE StablePrice odds.
+    - The law recomputes CLV from the sealed event log; it never reads the agent's `claimed_edge_bps`.
+    - Score rows are derived fresh on every verify call — doctoring a persisted score row is caught by the `metrics_recomputed` check.
+    - CLV confidence keys off the number of *scored picks*, never off law-valid abstentions. A thousand abstentions cannot dress up as a high-confidence record.
+
+    CLV is a metric, not a check. It ranks performance. It never gates proof eligibility.
+  </Accordion>
+
+  <Accordion title="Sealed evidence and evidence_hash">
+    Sealed evidence is the content-addressed, immutable prefix of the `run_events` log that the law uses for scoring. Before any scoring or receipt processing occurs, the pipeline hashes this prefix:
+
+    ```
+    evidence_hash = H(sealed run_events prefix)
+    ```
+
+    The derived tail — scores, receipts, telemetry, route events — lives *outside* the hash. This separation is intentional: it means that changing a sealed input (an odds tick, a recorded quote, an agent proposal) causes `evidence_integrity` to fail, while appending post-run metadata does not invalidate the seal.
+
+    The `evidence_hash` is bound into the run manifest alongside the score root, and the manifest hash is anchored on Solana. Anyone can independently verify that the sealed bytes were not altered between sealing and verification.
+
+    Runtime telemetry such as latency, token counts, retries, and traces is routed to the ops channel and never enters the evidence hash.
+  </Accordion>
+
+  <Accordion title="The 7 proof checks">
+    Every run produces a frozen, seven-member `CheckId` block. Each check recomputes from sealed evidence and returns `pass / fail / pending / not_applicable` — never a hardcoded PASS. Checks answer the question "can this run be trusted?" — they are not performance metrics and do not contribute to ranking.
+
+    | Check | What it proves |
+    |---|---|
+    | `evidence_integrity` | The recomputed `evidence_hash` matches the sealed run-event prefix — no byte was altered. |
+    | `llm_boundary` | No LLM SDK ever entered the trust path (import-audited; fails closed if a trust directory is missing). |
+    | `metrics_recomputed` | CLV and scores re-derived from the sealed payloads match the persisted scores — tamper a score row and this fails. |
+    | `manifest_bound` | The proof manifest binds `run_id`, evidence root, and score root together. |
+    | `policy_obeyed` | Every execution passed the two-phase policy gate — no decision bypassed the law. |
+    | `receipt_separation` | Off-chain venue receipts are non-scoring — a receipt can never become proof evidence. |
+    | `anchor` | The manifest hash is committed to Solana (honest `pending` or `not_applicable` when offline). |
+
+    The top-level `verified` flag reflects evidence-prefix integrity. The per-check block carries the full verdict. If any blocking check fails, the response renders as `⚠ NOT fully verified` even with an intact seal. For detailed documentation on each check, see the Scoring & Verification section.
+  </Accordion>
+
+  <Accordion title="Policy envelope">
+    The policy envelope is the execution boundary attached to every `AgentInstance`. It defines the conditions under which the agent is permitted to act and at what scale. The envelope is hashed into a `policy_hash` at deploy time; no runtime change can alter it without producing a new deployment.
+
+    Key policy envelope components:
+
+    - **Kill-switch** — An operator-level flag that immediately halts execution for the instance.
+    - **Stake caps** — Maximum stake per action and maximum total exposure. A live-only stake cap applies an additional limit in `live_guarded` mode.
+    - **Circuit breaker** — Counts executed failures. When the breaker is OPEN, the policy gate denies execution with zero venue I/O. Only *executed* failures trip the breaker — abstentions and policy denials do not count.
+    - **Slippage limit** — Maximum acceptable slippage between the quoted price and the submitted price.
+    - **Quote staleness bound** — Maximum age of a venue quote before the post-quote gate rejects the action.
+    - **Market allowlist** — The set of market identifiers the agent is permitted to trade.
+    - **Minimum executable edge** — The post-quote gate requires that the rendered executable edge clears this threshold before submitting.
+
+    Configs change strategy behavior. No config field can bypass the policy envelope's trust rules.
+  </Accordion>
+
+  <Accordion title="Run modes">
+    Veridex exposes five run modes, honestly labeled and never conflated. The mode is composed from two fields:
+
+    ```python
+    source_mode = "replay" | "live"
+    execution_mode = "paper" | "dry_run" | "live_guarded"
+    ```
+
+    | Mode | TxLINE source | Real venue / funds | Purpose |
+    |---|---|---|---|
+    | **Replay** | Content-hashed ReplayPack | No | Recreate a past market window deterministically |
+    | **Backtest** | Replay + scoring and leaderboard | No | Compare strategy performance before deployment |
+    | **Paper** | Live or replay | No | Strategy evaluation only — no execution lane fires |
+    | **Dry-run** | Live or replay | No (simulated receipt) | Test the full policy/execution lifecycle safely |
+    | **Live-guarded** | Live TxLINE feed | Yes (operator-armed only) | Production mode under policy guardrails |
+
+    The default mode is always dry. If a run cannot satisfy every arm condition for `live_guarded`, it degrades to a dry simulation and records the exact reason — `live_ready_false`, `missing_live_deps`, or `non_real_adapter`. A degraded run is not silently dropped; it is fully recorded and verifiable.
+  </Accordion>
+
+  <Accordion title="TxLINE StablePrice">
+    TxLINE StablePrice odds are the de-margined consensus fair-value odds that Veridex uses as its reference price feed. "De-margined" means the bookmaker's margin has been removed; the outcome probabilities sum to approximately 100%. This makes StablePrice odds a clean fair-value input for CLV scoring — they represent the market's consensus probability estimate, not a vigged price.
+
+    Veridex treats TxLINE StablePrice as the market-implied fair value. It does not re-de-vig these odds further. When the law computes CLV, it compares the sealed entry StablePrice probability against the sealed closing StablePrice probability — both from the same de-margined feed.
+
+    TxLINE odds authenticity is checkable: Veridex records a proof-status stamp for each odds message. In a live integrity check, 269 of 270 sampled World Cup odds messages returned valid TxLINE Merkle inclusion proofs. This means "the inputs weren't doctored" is something you can verify, not something you are asked to trust.
+  </Accordion>
+
+  <Accordion title="Merkle root-forest and manifest hash">
+    After each run, the pipeline constructs a Merkle root-forest spanning multiple evidence domains:
+
+    - **Evidence domain** — The sealed run-events prefix (the basis of `evidence_hash`)
+    - **Score domain** — Derived score rows (CLV, metrics)
+    - **Receipt domain** — Off-chain venue receipts (non-scoring, structurally separated)
+    - **Policy domain** — Policy gate verdicts for each action
+    - **Competition domain** — Arena competition metadata
+    - **Payout domain** — Settlement records (designed and visible; not yet wired)
+
+    The roots of these trees are bound together into a **run manifest**. The manifest also contains `run_id`, the evidence root, and the score root. The manifest is then hashed into a **manifest hash**, which is committed to Solana as a Memo transaction. This anchors the entire proof structure externally.
+
+    When you call `POST /runs/{id}/verify`, the verifier recomputes the checks from sealed bytes and confirms the manifest binding — it does not simply read back stored values.
+  </Accordion>
+
+  <Accordion title="Executable edge vs. mispricing gap vs. CLV — the strategy doctrine">
+    Three quantities are commonly confused in sports-trading agent discussions. Veridex treats them as structurally distinct, with different roles at different points in the pipeline.
+
+    | Quantity | Meaning | Role |
+    |---|---|---|
+    | **Fair Value** | TxLINE de-margined consensus probability | Market-implied; not re-de-vigged |
+    | **Mispricing Gap** | Fair vs. venue-implied probability, in bps | Probability-space dislocation — not an edge |
+    | **Executable Edge** | Forward EV at actual venue price for the exact submitted size | Gates execution; renders only with a real venue quote |
+    | **CLV** | Closing-line value, recomputed from sealed entry vs. close | The only scored metric |
+    | **Stake / Kelly** | Capped fractional Kelly under policy envelope | Policy sizing only; never a rank input |
+
+    **Why this distinction matters:**
+
+    - The **mispricing gap** is a probability-space number. It tells you that TxLINE and the venue disagree on probability. It does not tell you whether you can profit — the venue price may not be executable at that size, and the gap may be structural (e.g., a favorite-longshot divergence caused by de-margin-scale differences) rather than a strategy-specific dislocation.
+    - **Executable edge** is the EV form and is sized for the actual submission. It renders only when a genuine venue quote backs it. It gates whether the policy allows an action to proceed — it is not scored.
+    - **CLV** is the post-hoc measure of whether the entry beat the close. It is the only quantity that ranks agents on the leaderboard. An agent can have positive CLV without ever having rendered executable edge (e.g., in paper or replay modes).
+
+    Run-002 illustrated this precisely: the pipeline detected a +607 bps mispricing gap signal at the 0–20% probability range — but the `VenueBehaviorReport` identified this as a monotonic longshot ramp, the fingerprint of a structural de-margin-scale divergence, not strategy-specific dislocation. `real_executable_edge_bps` remained `None`. The platform refused to promote the number as alpha.
+  </Accordion>
+
+  <Accordion title="Config hash">
+    The `config_hash` is a deterministic, content-addressed fingerprint of the agent's full configuration, computed at deploy time. It pins the exact `AgentConfig` — every threshold, window, cap, mode flag, and allowlist — into the `AgentInstance` record.
+
+    The config hash serves two purposes:
+
+    1. **Reproducibility** — Any run associated with a given `config_hash` used exactly those settings. You can compare two runs by comparing their config hashes.
+    2. **Tamper evidence** — If a config field changes, the hash changes, producing a new deployment with a new `AgentInstance`. No runtime modification can silently alter an already-deployed instance's behavior.
+
+    The `policy_hash` works identically for the `PolicyEnvelope`. Both are stored in the durable `AgentInstance` record alongside the preflight audit results, run link, and status.
+  </Accordion>
+</AccordionGroup>

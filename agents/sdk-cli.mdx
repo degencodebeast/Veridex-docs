@@ -1,0 +1,117 @@
+---
+title: "veridex-agent SDK and CLI Reference"
+sidebarTitle: "SDK & CLI"
+description: "Use the veridex-agent CLI to run standalone sealed agents with any strategy template, config file, and execution mode."
+---
+
+The `veridex-agent` SDK is the standalone runner seam used by both the Agent Studio deploy endpoint and the CLI. Running an agent with the CLI or calling the deploy endpoint routes through the exact same single runner — there is no separate implementation. Every run produces a sealed, independently verifiable proof using the same law / policy / proof pipeline as the Arena.
+
+---
+
+## Installation
+
+Install the SDK with the agent, live, and API extras:
+
+```bash
+pip install -e ".[agent,live,api]"
+```
+
+---
+
+## CLI usage
+
+```bash
+veridex-agent run --config <path/to/agent.toml>
+```
+
+### Key CLI outputs
+
+After a successful run, the CLI prints a single `[VERIFIED]` line:
+
+| Field | Description |
+|---|---|
+| `run_id` | The unique identifier for this sealed run. Use it with `POST /runs/{run_id}/verify`. |
+| `source` | The data source mode: `replay` or `live`. |
+| `avg_clv_bps` | Average closing-line value in basis points, recomputed by the deterministic law from sealed evidence. Never self-reported by the agent. |
+| `manifest_hash` | The Merkle root-forest hash bound to this run. This is what gets anchored on Solana when `anchor=true`. |
+| `anchor` | `not_anchored` (default) or the Solana transaction signature when anchoring is configured. |
+
+---
+
+## The sample_agent.toml
+
+The file at `veridex_agent/sample_agent.toml` is the reference config for a standalone agent run. It contains strategy and policy parameters only — credentials are never stored in the TOML.
+
+```toml
+# Sample standalone-agent run config (WD-3). NON-SECRET ONLY.
+# Credentials (TxLINE JWT/X-Api-Token, Solana keypair, venue keys) come from veridex/.env
+# via veridex.config.Settings — NEVER from this file (COM-001).
+
+agent_id = "momentum-desk-1"
+strategy = "momentum"          # baseline | momentum | llm
+source_mode = "replay"         # replay | live
+fixture_path = "tests/fixtures/wd2_momentum_replay.json"
+
+# momentum tuning
+lookback = 8
+min_momentum_bps = 50
+
+# policy envelope (operator guardrails)
+max_stake = 100.0
+min_edge_bps = 8
+market_allowlist = ["M"]
+venue_allowlist = ["sx_bet"]
+execution_mode = "paper"       # paper | dry_run | live_guarded
+anchor = false                 # true → real Solana Memo anchor (requires SOLANA_KEYPAIR_PATH)
+```
+
+### Field reference
+
+| Field | Description |
+|---|---|
+| `agent_id` | A human-readable identifier for this agent instance. Appears in run records and the leaderboard. |
+| `strategy` | The strategy template to use: `baseline`, `momentum`, or `llm`. Selects which `AgentTemplate` `build_agent` instantiates. |
+| `source_mode` | Data source: `replay` (sealed ReplayPack, works offline, no credentials needed) or `live` (live TxLINE feed, requires TxLINE credentials in `veridex/.env`). |
+| `fixture_path` | Path to the sealed ReplayPack JSON file. Used only when `source_mode = "replay"`. |
+| `lookback` | Momentum window — maximum number of observations retained per market. Affects how many ticks of history the strategy considers. |
+| `min_momentum_bps` | Minimum net probability movement (bps) required to flag a side as a momentum candidate. Raising this value makes the strategy more selective. |
+| `max_stake` | Maximum stake per order in the PolicyEnvelope. The policy gate blocks any order that would exceed this value. |
+| `min_edge_bps` | Minimum recomputed executable edge (bps) required for the policy gate to allow execution. |
+| `market_allowlist` | List of market key prefixes the agent is permitted to act on. Actions targeting markets outside this list are blocked by the policy gate. |
+| `venue_allowlist` | List of venue identifiers the agent is permitted to route to. |
+| `execution_mode` | One of `paper` (no execution lane), `dry_run` (full policy/execution lifecycle with a simulated receipt), or `live_guarded` (real venue submission under policy, auth, and caps). |
+| `anchor` | When `false` (the default), the run reports `anchor=not_anchored`. Set to `true` to anchor the manifest hash as a Solana Memo; requires `SOLANA_KEYPAIR_PATH` in `veridex/.env`. |
+
+---
+
+## How the CLI routes through the runner seam
+
+The CLI and the Agent Studio deploy endpoint use the same single runner. When you call `veridex-agent run --config agent.toml`, the SDK:
+
+1. Loads and validates your TOML config via typed Pydantic models (invalid values fail with named reasons before any run starts).
+2. Calls `build_agent` in `veridex_agent/config.py` to instantiate the strategy template with your config parameters.
+3. Runs the agent through the same sealed pipeline as the Arena: agent proposes → law recomputes → policy gates → venue executes → proof seals.
+4. Anchors the manifest hash on Solana if `anchor=true` and `SOLANA_KEYPAIR_PATH` is available.
+5. Prints the `[VERIFIED]` line with `run_id`, `source`, `avg_clv_bps`, `manifest_hash`, and `anchor` status.
+
+The `run_id` printed by the CLI is the same ID you pass to `POST /runs/{run_id}/verify`. Verification re-runs the law over the sealed `run_events` prefix and returns a per-check verdict — identical behavior for CLI runs, deploy-endpoint runs, and Arena runs.
+
+<Note>
+Credentials — TxLINE JWT, `X-Api-Token`, Solana keypair path (`SOLANA_KEYPAIR_PATH`), and venue keys — come from `veridex/.env` via `veridex.config.Settings`. They are never read from the TOML file and must never be committed to your repository.
+</Note>
+
+---
+
+## Running in Docker
+
+Build the agent image and run it with credentials supplied via `--env-file`:
+
+```bash
+docker build -f Dockerfile.agent -t veridex-agent .
+docker run --rm \
+  --env-file veridex/.env \
+  -v "$PWD/agent.toml:/app/agent.toml" \
+  veridex-agent
+```
+
+The image contains no secrets. All credentials are injected at runtime through the environment file. The mounted `agent.toml` overrides the sample config inside the container.

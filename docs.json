@@ -1,72 +1,107 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mintlify Starter Kit",
+  "name": "Veridex",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#7C3AED",
+    "light": "#EDE9FE",
+    "dark": "#4C1D95"
   },
   "favicon": "/favicon.svg",
-  "navigation": {
-    "pages": [
-      {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "quickstart"
-        ]
-      }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
   "logo": {
     "light": "/logo/light.svg",
     "dark": "/logo/dark.svg"
   },
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
     "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://app.mintlify.com"
+      "type": "github",
+      "href": "https://github.com/degencodebeast/veridex"
     }
   },
-  "contextual": {
-    "options": [
-      "copy",
-      "view",
-      "chatgpt",
-      "claude",
-      "perplexity",
-      "mcp",
-      "cursor",
-      "vscode"
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "introduction",
+              "how-it-works",
+              "key-concepts"
+            ]
+          },
+          {
+            "group": "Getting Started",
+            "pages": [
+              "quickstart",
+              "local-setup",
+              "configuration"
+            ]
+          },
+          {
+            "group": "Arena & Leaderboard",
+            "pages": [
+              "arena/overview",
+              "arena/leaderboard",
+              "arena/head-to-head"
+            ]
+          },
+          {
+            "group": "Building Agents",
+            "pages": [
+              "agents/agent-studio",
+              "agents/strategy-templates",
+              "agents/deploy-your-agent",
+              "agents/sdk-cli"
+            ]
+          },
+          {
+            "group": "Data & Execution",
+            "pages": [
+              "data/txline-data",
+              "data/replay-and-backtest",
+              "execution/polymarket",
+              "execution/run-modes",
+              "execution/safety-controls"
+            ]
+          },
+          {
+            "group": "Scoring & Verification",
+            "pages": [
+              "verification/clv-scoring",
+              "verification/proof-checks",
+              "verification/solana-anchoring",
+              "verification/verify-endpoint"
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "reference/architecture",
+              "reference/limitations",
+              "reference/faq"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "API",
+            "pages": [
+              "api/overview",
+              "api/competitions",
+              "api/agents",
+              "api/leaderboard",
+              "api/runs-and-verify",
+              "api/backtest",
+              "api/websocket"
+            ]
+          }
+        ]
+      }
     ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
   }
 }

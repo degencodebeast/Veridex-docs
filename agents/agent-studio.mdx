@@ -1,0 +1,106 @@
+---
+title: "Agent Studio: Configure and Deploy Trading Agents"
+sidebarTitle: "Agent Studio"
+description: "Use Agent Studio to configure a strategy template, set policy guardrails, run a preflight check, and deploy a pinned AgentInstance in one flow."
+---
+
+Agent Studio is the UI and API surface for Veridex's end-to-end agent lifecycle:
+
+```
+configure → preflight → deploy → observe → verify
+```
+
+You choose a strategy template, set typed and bounded config parameters, run a preflight check that fails closed with named reasons, deploy a pinned `AgentInstance`, watch it trade in the Cockpit, and verify the sealed run — all in one flow.
+
+---
+
+## The AgentInstance model
+
+Every deployed agent is a pinned instance built from three components:
+
+```
+AgentTemplate + AgentConfig + PolicyEnvelope = AgentInstance
+```
+
+| Component | What it is |
+|---|---|
+| **AgentTemplate** | The strategy family — `SharpMomentumAgent`, `CumulativeDriftAgent`, value-vs-venue, baseline, and others. |
+| **AgentConfig** | The concrete deployed strategy instance: market universe, signal thresholds, warmup/lookback windows, confirmation rules, quote freshness, stake sizing, risk caps, cooldowns, source mode, and execution mode. |
+| **PolicyEnvelope** | The execution boundary: stake caps, order caps, allowlists, kill switch, quote freshness, and approval requirements. |
+
+Veridex stores every `AgentInstance` durably (Postgres or in-memory), so two users can deploy the same template with different configs, rank them head-to-head on the same leaderboard, and Veridex will still prove exactly what each one did.
+
+---
+
+## What gets pinned at deploy
+
+When you deploy, Veridex seals the following into the `AgentInstance` record:
+
+- **`config_hash`** — a deterministic hash of your full strategy configuration
+- **`policy_hash`** — a deterministic hash of the PolicyEnvelope
+- **Mode** — `replay`, `paper`, `dry_run`, or `live_guarded`; never conflated
+- **Allowlists** — `market_allowlist` and `venue_allowlist` as configured
+- **Run link** — the `run_id` returned before seal completes
+- **Preflight audit** — a named record of every check that ran before deploy
+
+The `config_hash` is the sealed identity of your strategy. A backtest is reproducible purely from its config because the same config always produces the same hash, the same sealed inputs produce the same actions, and the same law always produces the same CLV.
+
+---
+
+## The preflight check
+
+Before any deploy, Agent Studio runs a typed, bounded preflight over your config. Invalid values fail with named reasons — Veridex never silently deploys a "weird but hashable" instance.
+
+Each deployed `AgentInstance` carries its named preflight audit as a permanent attached record. You can see exactly which checks passed and, if a deploy was blocked, which named reason caused the failure.
+
+<Note>
+A preflight that "didn't object" is not the same as a preflight that explicitly passed. Veridex tracks the distinction — an unchecked field does not read as a pass.
+</Note>
+
+---
+
+## What configs can and cannot change
+
+Configs are powerful. They control trading behavior and profitability directly — two users on the same template with different configs can produce different CLV, PnL, hit rate, and drawdown.
+
+However, configs operate strictly within Veridex's trust boundary. **No config can change the trust rules.** Specifically, no config can:
+
+- Bypass or modify deterministic law / recompute
+- Bypass or modify policy gating
+- Alter evidence integrity or the evidence hash
+- Affect the 7 proof checks
+- Bypass receipt separation
+- Touch scoring immutability
+
+The agent can trade differently. It cannot grade itself differently.
+
+---
+
+## The deploy flow
+
+Follow these steps to go from a strategy template to a running, verified agent:
+
+<Steps>
+  <Step title="Choose a strategy template">
+    Select from the available templates in Agent Studio: `momentum` (Sharp Momentum v2), `cumulative-drift`, `value`, `llm`, or `baseline`. Each template is a strategy family with its own configurable parameters.
+  </Step>
+  <Step title="Set config parameters">
+    Fill in the typed, bounded config fields for your chosen template — for example, `lookback`, `min_momentum_bps`, `max_stake`, `min_edge_bps`, `market_allowlist`, `venue_allowlist`, `execution_mode`, and `anchor`. Invalid values are rejected at this step with named reasons.
+  </Step>
+  <Step title="Run preflight">
+    Agent Studio runs the preflight check over your config. Every check that runs is named in the preflight audit. A failure blocks deploy and tells you exactly why.
+  </Step>
+  <Step title="Deploy">
+    On success, Veridex seals `config_hash`, `policy_hash`, mode, allowlists, and the preflight audit into a durable `AgentInstance` record and returns a `run_id` before the seal completes. Your agent is now running.
+  </Step>
+  <Step title="Observe in Cockpit">
+    Watch your agent's full decision trail in the Live Cockpit — every `AGENT_ACTION` streams with its proposal, law recompute, policy gate decision, and venue receipt. The Decision Inspector fences any LLM rationale as `NOT AN INPUT TO SCORE`.
+  </Step>
+  <Step title="Verify the sealed run">
+    When the run completes, open the Proof Card and click **Verify**, or call `POST /runs/{run_id}/verify` directly. Veridex re-runs the deterministic law over the sealed evidence and returns a per-check verdict. Tamper with one sealed byte and the proof goes red.
+  </Step>
+</Steps>
+
+<Note>
+Replay mode works end-to-end with no credentials — the default app runs fully offline from a sealed ReplayPack. Live TxLINE requires a TxLINE JWT. Real-money `live_guarded` execution additionally requires operator-only arming steps; see the Safety Controls documentation.
+</Note>

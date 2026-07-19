@@ -1,0 +1,132 @@
+---
+title: "Veridex Platform Architecture Overview"
+sidebarTitle: "Architecture"
+description: "Understand the Veridex layer model: ingest, agents, runtime, trust core, policy and execution, chain anchoring, and the frontend proof surface."
+---
+
+## The One-Sentence Architecture
+
+Veridex is one chain in which **no link trusts the previous one**:
+
+```
+AGENT proposes → LAW recomputes → POLICY gates → VENUE executes → PROOF verifies → LEADERBOARD ranks
+```
+
+TxLINE de-margined odds flow through one normalizer into frozen per-tick `MarketState` snapshots. The runtime runs N agents concurrently on identical snapshots and seals the run — ticks, decisions, errors, and (for live windows) the reconstructed closing line — into a hash-covered sealed prefix. The law deterministically recomputes edge and CLV from those sealed bytes, never from an agent's claims. The policy gate decides, in two phases around the venue quote, whether acting is safe. The venue adapter executes behind multiple independent locks, and its receipts are structurally non-scoring. The proof layer recomputes everything fresh — seven falsifiable checks, a Merkle root-forest, a manifest hash anchored as a Solana Memo — and exposes `POST /runs/{id}/verify` so anyone can re-derive the verdict. The leaderboard ranks on recomputed CLV only. The deploy platform (Studio, API, CLI/SDK) pins typed, bounded configs into durable `AgentInstance` records and launches every run through one shared runner seam, so deployed agents earn the exact same proof as arena runs.
+
+---
+
+## Layer Responsibilities
+
+| Layer | Modules | Owns | Must Never |
+|---|---|---|---|
+| **Ingest** | `veridex/ingest/` | Auth, SSE stream, odds history, the ONE normalizer, ReplayPacks, CON-040 closing reconstruction, feed health | Let telemetry (feed health) become evidence; parse live and replay through different code paths |
+| **Agents** | `veridex/strategies/`, `veridex/runtime/agent.py` | Proposing constrained `AgentAction`s; strategy state over past ticks only | Score themselves; see a future tick; differ in inputs from a co-competing agent |
+| **Runtime** | `veridex/runtime/` | The incremental run core (feed/finalize), live windows, the sealed prefix, evidence hashing, persist-then-broadcast | Let concurrency reach the deterministic seal; feed a tick after finalize; fabricate a closing line |
+| **Trust core** | `veridex/law/`, `scoring.py`, `leaderboard.py`, `checks/`, `verifier/`, `policy/`, `ingest/` | Recomputing every number from sealed evidence; the 7 checks; CLV-only ranking | Import an LLM SDK; trust a claimed edge; hardcode a PASS; rank on anything but CLV |
+| **Policy + execution** | `veridex/policy/`, `veridex/execution/`, `veridex/venues/` | Two-phase gating, the breaker, sizing, honest receipts, fail-closed venue resolution, the operator-only live path | Mint a second gating authority; fabricate a fill; guess a token; place real money without every lock open |
+| **Chain** | `veridex/chain/` | Merkle root-forest, the manifest, the Memo anchor | Anchor anything other than the manifest hash; claim an anchor that didn't happen |
+| **Platform** | `veridex/api/`, `veridex/deploy/`, `veridex/backtest/`, `veridex/competition/`, `veridex/store.py`, `veridex_agent/` | The deploy loop, durable AgentInstances, the verify/read API, the canonical event log, backtests, the single runner seam | Launch without a persisted instance; pass live-money deps over HTTP; leak a raw trace into a record or response |
+| **Frontend** | `apps/web/` | Rendering served truth: contracts-first adapters, the edge display gate, the untrusted-LLM fence, honest mode labels | Reimplement law/scoring/checks; compute a client-side "pinned" hash; render an edge without a real venue quote |
+
+---
+
+## Repository Layout → Architecture Mapping
+
+```
+veridex-arena/
+├── veridex/                  # Python backend — the proof engine
+│   ├── ingest/               #   Ingest layer: auth, normalizer, ReplayPacks, feed health
+│   ├── runtime/              #   Runtime: CompetitionRun, live runner, window, evidence seal
+│   ├── law/                  #   Trust core: the deterministic law + executable edge
+│   ├── checks/               #   Trust core: the 7-check taxonomy
+│   ├── verifier/             #   Trust core: verify_run + proof cards + the import audit
+│   ├── scoring.py            #   Trust core: is_scored + the metric stack
+│   ├── leaderboard.py        #   Trust core: cross-run CLV-only ranking
+│   ├── policy/               #   Two-phase gate · envelope · pure circuit breaker
+│   ├── execution/            #   The execution lane (receipts non-scoring) + edge legibility
+│   ├── venues/               #   VenueAdapter seam · Polymarket read/write · resolver · preflight
+│   │   └── _vendor/          #   Vendored, pinned MIT-licensed Polymarket CLOB client
+│   ├── strategies/           #   Agents: momentum v1 · Sharp Momentum v2 · value · sharp stats
+│   ├── backtest/             #   BacktestRunner + honest-mode reports
+│   ├── deploy/               #   Deploy preflight · durable AgentInstance
+│   ├── competition/          #   Arena service · canonical event log · operator live routing
+│   ├── chain/                #   Merkle root-forest + Solana Memo anchor
+│   ├── api/                  #   FastAPI: verify · deploy · leaderboard · WS · demo
+│   └── store.py              #   Postgres / in-memory persistence
+├── veridex_agent/            # The SDK/CLI — routes through the same single runner seam
+├── apps/web/                 # Next.js frontend (Studio · Cockpit · Inspector · Proof Card)
+├── scripts/                  # demo_phase2d.py (judge demo) · operator smoke · live tooling
+├── tests/                    # 1,000+ offline tests incl. the byte-for-byte golden seal suite
+└── docs/                     # architecture · technical-deep-dive · runbooks · FAQ
+```
+
+Every module listed maps directly to a layer in the table above. The `veridex_agent/` SDK and the `veridex/api/deploy.py` endpoint both route through the same `standalone_run` seam — there is no parallel runner.
+
+---
+
+## The Proof Loop in Five Steps
+
+The sequence every run follows, and that every `POST /runs/{id}/verify` call retraces:
+
+1. **Propose.** The agent reads a sealed tick snapshot and emits a constrained `AgentAction`. Its `claimed_edge_bps` is recorded as untrusted metadata and never scored.
+2. **Recompute.** The deterministic law (`veridex/law/recompute.py`) derives CLV and edge from the sealed `MarketState` evidence — never from the agent's claims.
+3. **Gate and execute.** A two-phase policy gate runs pre-quote checks (kill-switch, breaker, stake caps, allowlists) and post-quote checks (staleness, slippage, executable edge). If all pass, the venue adapter executes. Receipts are structurally non-scoring.
+4. **Seal and score.** `evidence_hash = SHA-256(sealed run_events prefix)`. Score rows are ranked by recomputed CLV only. A Merkle root-forest and manifest are assembled; the manifest hash is anchored to Solana as a Memo transaction.
+5. **Verify.** Anyone calls `POST /runs/{id}/verify`. The verifier re-runs the law over sealed bytes, rebuilds all 7 checks fresh, and returns a per-check verdict. Tampering with one sealed byte turns the proof red.
+
+---
+
+## The AgentInstance Formula
+
+```
+AgentTemplate + AgentConfig + PolicyEnvelope + Evidence = AgentInstance
+```
+
+- The **template** is the strategy family (`SharpMomentumAgent`, value-vs-venue, baseline, and others).
+- The **config** is the real strategy — thresholds, market universe, warmup, quote requirements, sizing, risk caps, cooldowns, source mode, and execution mode — all typed, bounded, and folded into a `config_hash`.
+- The **policy envelope** is the execution boundary, with its own `policy_hash`.
+
+A deploy pins all of it into a durable, store-backed `AgentInstance`. Two users can deploy the same template with different configs, rank head-to-head on the same falsifiable leaderboard, and get different performance — Veridex still proves exactly what each one did. **Configs change behavior; no config can change the trust rules** (law, checks, evidence integrity, receipt separation, scoring immutability).
+
+---
+
+## Five Key Trust Boundaries
+
+These invariants are enforced by tests and a static import audit — not good intentions.
+
+<AccordionGroup>
+  <Accordion title="1. Checks ≠ metrics (CLV is never a check)">
+    Proof checks certify the *record*; metrics rank *performance*. CLV is a metric and never appears as a `CheckId`. The 7-check taxonomy is a frozen enum (`veridex/checks/result.py`). Adding CLV to checks would conflate trust with performance — the two must stay orthogonal so proof completeness cannot be gamed by abstaining or by an agent's own claims.
+  </Accordion>
+
+  <Accordion title="2. No hardcoded PASS">
+    Every check recomputes from sealed evidence and can return `fail`. Each builder in `veridex/checks/build.py` fails closed on an exception. The suite tampers on purpose — a doctored `clv_bps` fails `metrics_recomputed` even with an intact seal — to confirm every check is genuinely falsifiable.
+  </Accordion>
+
+  <Accordion title="3. Receipts non-scoring">
+    Off-chain venue receipts are structurally `evidence=False`. A fill can never become proof evidence. This is enforced at three layers: constructor shape (`competition/events.py`), the `receipt_separation` check, and a causal-inertness test that proves running the execution lane leaves proof-card skill blocks byte-identical to not running it.
+  </Accordion>
+
+  <Accordion title="4. CLV-only ranking">
+    The rank key in both `scoring.py` and `leaderboard.py` orders by recomputed CLV only. Confidence, Kelly fraction, eligibility badges, proof completeness, and anchor status are deliberately absent from both rank keys. Proof completeness is an eligibility badge — it is not a performance score.
+  </Accordion>
+
+  <Accordion title="5. Zero LLM SDK in the trust path (statically audited)">
+    The trust path (`veridex/law/`, `veridex/checks/`, `veridex/scoring.py`, `veridex/leaderboard.py`, `veridex/verifier/`, `veridex/policy/`, `veridex/ingest/`) is import-audited to contain zero LLM SDK code. The audit runs live as the `llm_boundary` proof check and fails closed if a trust directory is missing — a vacuous pass on a deleted directory is not possible.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## The Single Runner Seam
+
+All paths to a sealed, verified run — the Studio deploy endpoint, the `veridex-agent` CLI, and the SDK — route through one shared function: `veridex_agent/run.py::standalone_run`.
+
+There is no parallel runner. This matters because:
+
+- A bug fixed at the seam is fixed everywhere, simultaneously.
+- Deployed agents verify through the identical `POST /runs/{id}/verify` endpoint as arena runs. There is no separate "deployed verification" — one endpoint, one law, one proof shape.
+- The default app resolves a real replay source when no live credentials are injected, so the Studio deploy flow works end-to-end with zero credentials.
+
+The seam dispatches on `window` to compose either a replay seal or a live seal (calling `run_live_window` rather than re-implementing it), then runs a shared tail: self-verify, the optional execution lane, and a non-scoring agent-instance pin.

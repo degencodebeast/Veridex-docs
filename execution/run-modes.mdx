@@ -1,0 +1,74 @@
+---
+title: "Veridex Run Modes: Replay to Live-Guarded"
+sidebarTitle: "Run Modes"
+description: "Understand the five Veridex run modes — from offline replay to live-guarded real-money execution — and how to configure source_mode and execution_mode."
+---
+
+## How run modes are composed
+
+Every Veridex run is defined by two independent fields:
+
+- **`source_mode`**: `replay` | `live`
+- **`execution_mode`**: `paper` | `dry_run` | `live_guarded`
+
+The combination of these two fields determines the run's total mode label. An unmapped pair raises an error rather than silently defaulting — the mode label function is total and exhaustive.
+
+## The five modes
+
+| Mode | source_mode | execution_mode | Real TxLINE? | Real Funds? | Purpose |
+|---|---|---|---|---|---|
+| Replay | `replay` | _(none)_ | No | No | Reproduce a historical market window |
+| Backtest | `replay` | `paper` | No | No | Score strategy performance on sealed data |
+| Paper | `live` or `replay` | `paper` | Maybe | No | Strategy evaluation, no execution lane |
+| Dry-run | `live` or `replay` | `dry_run` | Maybe | No | Full policy/execution lifecycle with simulated receipt |
+| Live-guarded | `live` | `live_guarded` | Yes | Yes | Real venue submission under all guardrails |
+
+Each mode is honestly labeled everywhere it appears — in the proof card, the run metadata, the backtest report, and the UI. A Backtest is never labeled Live; a Dry-run is never labeled as an executed order.
+
+## Default behavior: safe state
+
+The platform defaults to the safe state. You get a dry/paper run by doing nothing:
+
+- Studio deploys default to `execution_mode = "paper"`
+- The Polymarket adapter constructs with `dry_run = True` by default
+- Writes are disabled unless `POLYMARKET_WRITE_ENABLED` is set
+- The standalone runner's non-paper default is `dry_run`
+
+Real-money execution requires explicit operator steps beyond any default configuration. See [Safety Controls](/execution/safety-controls) and the operator runbook.
+
+## Degraded runs
+
+If a run is configured as `live_guarded` but fails any of the arming checks, it **degrades to a dry simulation** rather than erroring. The degraded run:
+
+- Runs with a `FakeVenueAdapter` in `dry_run` mode
+- Records `degraded_because_not_armed: true` in a non-sealed telemetry event
+- Records the specific reason: `live_ready_false` | `missing_live_deps` | `non_real_adapter`
+- Produces a fully sealed proof, verifiable through `POST /runs/{id}/verify`
+
+A degraded run is never silently presented as live-guarded. You can always read *why* a run went dry from the execution route event in the competition log.
+
+## Mode details
+
+### Replay
+
+A replay feeds recorded ticks from a ReplayPack through the runtime in order. No live TxLINE connection is required. Replay is the foundation for both backtest scoring and the offline judge demo. The `ANCHOR` proof check reads `not_applicable` for offline replay runs — this is an honest `info`-severity state, not a blocking failure.
+
+### Backtest
+
+A backtest is `source_mode = "replay"` with `execution_mode = "paper"` — replay plus evaluation. CLV scores, proof checks, a Merkle root, and a proof card are all produced identically to a live run. The BacktestRunner uses the same `CompetitionRun` as the live loop; there is no separate backtest engine. The `run_id` is derived from the pack's `content_hash` plus the window ID, so the same pack always produces byte-identical sealed output.
+
+### Paper
+
+Paper mode (`execution_mode = "paper"`) runs the agent through the full tick-by-tick loop and computes CLV against the closing line, but submits no orders and invokes no execution lane. It works with either `source_mode`. Paper is the correct mode for strategy evaluation when you want live TxLINE data but no execution side effects.
+
+### Dry-run
+
+Dry-run (`execution_mode = "dry_run"`) exercises the full policy gate and execution lifecycle — pre-quote checks, venue quote fetch, post-quote checks — but replaces the real submit with a simulated receipt built directly, never touching the write path. The policy gate fires for real, the circuit breaker is active, and the execution lane runs end-to-end with a fake fill. Dry-run proves the execution lane would have fired under policy; it does not prove skill.
+
+### Live-guarded
+
+Live-guarded (`source_mode = "live"`, `execution_mode = "live_guarded"`) is the only mode that places real venue orders. It requires every arming gate to be satisfied simultaneously — see [Safety Controls](/execution/safety-controls) for the full conjunction. Live-guarded is **operator-only by construction**: the HTTP API passes no live dependencies, so no HTTP request or agent proposal can arm real-money execution.
+
+<Important>
+`live_guarded` is the only mode that can place a real Polymarket order. Every other mode — including a dry-run that returns a plausible receipt — is structurally incapable of submitting to the venue. No configuration change and no agent action can promote a non-live-guarded run to real-money execution.
+</Important>

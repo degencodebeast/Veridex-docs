@@ -1,0 +1,119 @@
+---
+title: "How Veridex Proves Every Agent Run"
+sidebarTitle: "How It Works"
+description: "Follow the Veridex proof loop from agent proposal through deterministic scoring, policy gating, venue execution, and Solana anchoring."
+---
+
+## The proof loop
+
+Every agent run in Veridex passes through the same sealed proof pipeline. The loop is designed so that no single participant — not the agent, not the venue, not the operator — can produce a favorable result by manipulating their own step.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  TxLINE live odds  →  de-margined CONSENSUS FAIR PROBABILITY (sealed) │
+└─────────────────────────────────────────────────────────────────────┘
+                               │
+      (1) PROPOSE              ▼                trust path = ZERO LLM imports
+┌──────────────────┐   constrained AgentAction  ┌────────────────────────────────┐
+│  Agent (template │ ────────────────────────▶  │  (2) DETERMINISTIC LAW          │
+│  + pinned config)│   {market, side, params}   │  recompute edge + CLV from      │
+│  claimed_edge =  │                             │  the SEALED evidence only       │
+│  UNTRUSTED       │                             │  (law/recompute.py)             │
+└──────────────────┘                             └────────────────────────────────┘
+                                                        │
+                               (3) GATE + EXECUTE       ▼
+                        ┌─────────────────────────────────────────────┐
+                        │  Two-phase POLICY gate                        │
+                        │  pre-quote: kill-switch · stake · allowlist   │
+                        │            · circuit breaker · live cap       │
+                        │  post-quote: staleness · slippage · exec-edge │
+                        │  → VENUE (Polymarket) · receipts NON-SCORING  │
+                        └─────────────────────────────────────────────┘
+                                                        │
+                               (4) SEAL + SCORE         ▼
+┌───────────────────────────────────────────────────────────────────────────┐
+│  evidence_hash = H(sealed run_events prefix)  ·  score_rows ranked by CLV   │
+│  7 CheckResults recomputed  ·  Merkle root-forest (evidence/score/receipt/…) │
+└───────────────────────────────────────────────────────────────────────────┘
+                                                        │
+                               (5) ANCHOR + VERIFY      ▼
+┌───────────────────────────────────────────────────────────────────────────┐
+│  manifest_hash  →  Solana Memo anchor  ·  POST /runs/{id}/verify             │
+│  re-runs the law over sealed evidence → per-check verdict                    │
+│  → "✓ verified" or "⚠ NOT verified"                                          │
+└───────────────────────────────────────────────────────────────────────────┘
+```
+
+## Step-by-step walkthrough
+
+<Steps>
+  <Step title="Agent proposes a constrained AgentAction">
+    The agent reads TxLINE de-margined odds, applies its strategy logic, and emits a constrained `AgentAction` — a structured proposal containing a market, a side, and sizing parameters. The agent may also include a `claimed_edge_bps` field in its proposal.
+
+    **This claimed edge is untrusted metadata.** It is recorded in a separate, fenced block and has no data path to the law's recompute. The UI labels it `NOT AN INPUT TO SCORE`. Whether the agent is an LLM or deterministic code, its self-reported numbers are never the basis for ranking.
+  </Step>
+  <Step title="Deterministic law recomputes edge and CLV from sealed evidence">
+    The law (`law/recompute.py`) receives only sealed evidence — the ingested TxLINE tick sequence and any recorded venue quotes — and recomputes:
+
+    - **Mispricing gap** — TxLINE fair probability vs. venue-implied probability, in basis points. This is a probability-space dislocation, not an edge.
+    - **Executable edge** — forward EV at the actual venue price for the exact submitted size. This renders only when a genuine venue quote backs it.
+    - **CLV** — closing-line value, recomputed from the sealed entry probability vs. the sealed closing probability.
+
+    The trust path is import-audited to contain zero LLM SDK code. The law never reads `claimed_edge_bps`.
+  </Step>
+  <Step title="Two-phase policy gate">
+    Before the venue is contacted and again after a quote is received, the two-phase policy gate evaluates whether the proposed action is safe to execute:
+
+    **Pre-quote checks:** kill-switch status, stake caps, market allowlist, circuit breaker state, live-only cap.
+
+    **Post-quote checks:** quote staleness (bounded freshness), slippage vs. threshold, executable edge (the rendered EV must clear the configured minimum).
+
+    Any gate failure causes the run to degrade to a dry simulation. The degradation reason is recorded — `degraded_because_not_armed: live_ready_false | missing_live_deps | non_real_adapter` — so every non-execution is explained, not silently dropped.
+  </Step>
+  <Step title="Venue execution on Polymarket">
+    When all gate checks pass, the venue adapter submits the order to Polymarket via the read/write CLOB integration. The adapter uses decimal-odds price discipline (the native price is audit-only) and an event→market resolver that raises `MarketUnavailable` rather than guess an ambiguous token.
+
+    **Receipts are structurally non-scoring.** A fill record sits in a non-sealed domain of the Merkle root-forest. It can never enter the evidence hash, influence CLV, or appear as a proof check. `receipt_separation` is one of the seven checks and is verified on every run.
+  </Step>
+  <Step title="Seal and score">
+    After execution (or dry-run), the pipeline:
+
+    1. Computes `evidence_hash = H(sealed run_events prefix)` — covering only the sealed event log, not the derived tail (scores, receipts, telemetry).
+    2. Recomputes all seven `CheckResult` values from sealed bytes.
+    3. Derives `score_rows` ranked by recomputed CLV.
+    4. Builds a Merkle root-forest spanning the evidence, score, receipt, policy, competition, and payout domains.
+    5. Binds the run manifest — `run_id`, evidence root, and score root — into a single manifest hash.
+  </Step>
+  <Step title="Anchor and verify">
+    The manifest hash is committed to Solana as a Memo transaction (confirmation measured at approximately 1.3 seconds on devnet). This anchors the proof externally and immutably.
+
+    Anyone can then call `POST /runs/{id}/verify`. The verifier re-runs the deterministic law over the sealed event log and returns a per-check verdict. If any blocking check fails, the top-level response renders as `⚠ NOT fully verified` — there is no false green. Deployed agents, arena runs, and backtests all use the same verify endpoint.
+  </Step>
+</Steps>
+
+## Why this architecture prevents self-grading
+
+The proof pipeline enforces a hard wall between what the agent claims and what gets scored through two separate code paths with no data flow between them:
+
+- **Path A — agent proposal:** reads TxLINE state, applies strategy logic, emits `AgentAction` with optional `claimed_edge_bps`. This path may include LLM SDK code.
+- **Path B — deterministic law:** receives only sealed evidence, recomputes CLV and edge independently. This path is import-audited to contain zero LLM SDK code.
+
+`claimed_edge_bps` is written only to an untrusted metadata block. There is no variable, function, or side-channel that passes it to Path B. The law reads sealed event payloads; it never reads the agent proposal's edge claim. This separation is enforced by tests and a runtime import audit — not by convention.
+
+## Run modes
+
+Veridex exposes five run modes, honestly labeled and never conflated. The default is always dry — the safe state is the state you get by doing nothing.
+
+| Mode | TxLINE source | Real venue/funds | Purpose |
+|---|---|---|---|
+| **Replay** | Recorded ReplayPack (content-hashed) | No | Recreate a past market window deterministically |
+| **Backtest** | Replay plus CLV scoring, checks, and leaderboard | No | Compare strategy performance before deployment |
+| **Paper** | Live TxLINE feed or replay | No | Strategy evaluation; no execution lane fires |
+| **Dry-run** | Live or replay | No (simulated receipt) | Test the full policy/execution lifecycle safely |
+| **Live-guarded** | Live TxLINE feed | Yes (operator-armed only) | Production mode — real venue submission under policy |
+
+A real Polymarket order requires every gate to pass: the mode must be exactly `live_guarded`; the operator must have supplied an adapter bundle with `live_ready == True`; the adapter's own write lock must be enabled with `dry_run=False`; and the circuit breaker must be CLOSED. Miss any one of these and the run degrades to a dry simulation that records exactly why.
+
+<Note>
+  No real-money order has been placed yet. The `live_guarded` surface is built and reviewed; the first 1-share smoke is deliberately a human operator's decision. No HTTP path arms real money — real execution is operator-direct-only, by construction.
+</Note>

@@ -1,47 +1,130 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with Veridex in Minutes"
+sidebarTitle: "Quickstart"
+description: "Run the Veridex demo, verify a sealed proof, and explore the web UI — all offline with no credentials required."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
+In this guide you'll run the Veridex judge demo, produce two real sealed runs from the shipped ReplayPack, hit the verify endpoint to independently recompute the proof from sealed evidence, and optionally explore the full product surface in the web UI — all without any credentials, database, or internet access.
 
 ## Prerequisites
 
-Before you begin, you must have:
+| Requirement | Notes |
+|---|---|
+| **Python 3.11+** | Check with `python --version` |
+| **git** | To clone the repository |
+| **Node.js + pnpm** | Required only for the web UI (step 5) |
 
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
+No database, wallet, API keys, or internet access are required for the default demo.
 
-## Get started
+---
+
+## Steps
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
 
-    ```bash
-    npm install your-package
-    ```
-  </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+### Clone and install
 
-    ```bash
-    your-cli init
-    ```
-  </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+From the repository root (`veridex-arena/`), create a virtual environment and install the full extras bundle:
 
-    ```bash
-    your-cli start
-    ```
-  </Step>
-</Steps>
+```bash
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -e ".[api,agent,live]"
+```
+
+This installs the proof engine, the FastAPI/uvicorn API server, the agent SDK, and the live-feed dependencies. The `[api]` extra is the minimum needed to serve verify URLs locally; `[agent,live]` adds the standalone agent CLI and TxLINE client.
 
 <Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
-
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
+If you prefer `uv`, the repository ships a `uv.lock`. Run `uv sync --extra api` and prefix subsequent commands with `uv run` instead of activating the venv.
 </Tip>
+
+### Run the test suite
+
+```bash
+pytest -q
+```
+
+This runs 1,000+ backend tests — fully offline and deterministic. Veridex's correctness is its product, so the test suite includes a byte-for-byte golden seal suite that guards the sealed path against regressions, a trust-path import audit asserting zero LLM SDK in the law/checks/scoring/verifier/policy path, and adversarial tamper tests (e.g. a doctored `clv_bps` row correctly triggers a `metrics_recomputed` failure).
+
+### Run the demo
+
+```bash
+python scripts/demo_phase2d.py --serve
+```
+
+This replays the banked ReplayPack that ships with the repository, produces two **real sealed runs**, writes `demo_manifest.json` to the repository root, and boots the API on `http://localhost:8080`. You will see output similar to:
+
+```
+=== Veridex Phase-2D demo ===
+flagship strategy : Sharp Momentum v2
+pack              : demo_pack  (content_hash cd7e0daa53a0…)
+data provenance   : synthetic-illustrative
+manifest          : demo_manifest.json
+mode labels are HONEST — a Backtest over SYNTHETIC illustrative odds, never 'Live'; no real-money orders.
+
+  [backtest] Backtest  run_id=bt_cd7e0daa53a0_wc_demo
+             avg_clv=626.5 bps  sample=35  (high)
+             ↳ CLV over SYNTHETIC illustrative odds — demonstrates the sealed-CLV metric pipeline, NOT a real strategy edge.
+             verify → /runs/bt_cd7e0daa53a0_wc_demo/verify
+  [paper   ] Backtest  run_id=paper_cd7e0daa53a0
+             verify → /runs/paper_cd7e0daa53a0/verify
+```
+
+Two runs are produced:
+
+- **`backtest`** — the flagship Sharp Momentum v2 scored against the pack's reconstructed pre-match close. `avg_clv` is the mean closing-line value in basis points; `sample` is the number of scored decisions.
+- **`paper`** — the same flagship through the standalone paper lane: proof-only, no venue orders. On a replay source this honestly reads *Backtest* — the `kind` names the lane, the mode label names the source × execution honesty.
+
+The run IDs are **deterministic** (pinned from the pack's content hash), so re-running produces the same IDs and the same numbers.
+
+<Note>
+The demo uses the shipped `demo_pack`, which contains **synthetic illustrative** odds — chosen to exhibit the sharp, sustained repricing Sharp Momentum v2 is built to detect. Every surface that carries a CLV number also carries its data provenance: the pack self-declares `synthetic: true`, each manifest run entry carries `data_provenance` / `synthetic_data` / an inline `clv_caveat`, and the console prints the caveat in the CLV block. The `+626.5 bps` demonstrates the sealed-CLV *pipeline* — it is **not** a claim of real strategy edge. Mode labels read **Backtest**, never **Live**, and `real_executable_edge_bps` is `null` on all replay/paper paths.
+</Note>
+
+### Verify a proof
+
+With the server running (from step 3), POST to the verify endpoint for either run ID:
+
+```bash
+curl -X POST http://localhost:8080/runs/bt_cd7e0daa53a0_wc_demo/verify
+```
+
+The response re-derives the score root, recomputes the sealed evidence hash, and rebuilds the run manifest. A `verified: true` result means the numbers were **independently reproduced from the sealed event log** — not asserted from stored values. The response includes a per-check verdict for all seven structural proof checks:
+
+| Check | What it proves |
+|---|---|
+| `evidence_integrity` | The recomputed `evidence_hash` matches the sealed run-event prefix — no byte was altered. |
+| `llm_boundary` | No LLM SDK entered the trust path (import-audited; fails closed if a trust directory is missing). |
+| `metrics_recomputed` | CLV/scores re-derived from sealed payloads match the persisted scores — tamper a score row and this fails. |
+| `manifest_bound` | The proof manifest binds `run_id`, evidence root, and score root together. |
+| `policy_obeyed` | Every execution passed the two-phase policy gate. |
+| `receipt_separation` | Off-chain venue receipts are non-scoring — a receipt can never become proof evidence. |
+| `anchor` | The manifest hash is committed to Solana (honest `pending`/`not_applicable` when offline). |
+
+This is the same `/runs/{id}/verify` path an arena run uses. The frontend renders this verdict — it never re-implements the law.
+
+Press `Ctrl-C` to stop the demo server.
+
+### (Optional) Start the web UI
+
+In a separate terminal, with the API server still running:
+
+```bash
+cd apps/web && pnpm install && pnpm dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) to access the full product surface:
+
+- **Live Cockpit** — streams the full decision trail for each agent (proposal → law → policy → receipt) in real time. The Cockpit renders the run's mode label, evidence hash, and live CLV scores as they accumulate.
+- **Decision Inspector** — shows the LLM/strategy proposal fenced as `NOT AN INPUT TO SCORE` alongside the deterministic law's recompute of CLV. The hard wall between what the model claims and what gets scored is visible here.
+- **Proof Card + Verify** — renders the seven-check verdict, evidence hash, and Solana anchor status for any sealed run. The Verify button calls `POST /runs/{id}/verify` and renders the recomputed result.
+- **Agent Studio** — configure and deploy agents from strategy templates. In replay mode (the default with no credentials) the full `configure → preflight → deploy → observe → verify` flow works end-to-end.
+- **Leaderboard** — CLV-ranked results, recomputed from sealed evidence, with honest confidence tiers based on sample size.
+
+</Steps>
+
+---
+
+<Note>
+Live TxLINE odds feed and Solana anchoring require credentials set in `veridex/.env`. Real-money execution additionally requires operator-only arming steps. See the [Configuration](/configuration) page for all environment variables and the operator runbook for the guarded live path. Nothing in the repository places a real order on its own.
+</Note>

@@ -1,0 +1,171 @@
+---
+title: "Agent Registration and Deployment API"
+sidebarTitle: "Agents"
+description: "Register agents on a competition roster and deploy standalone AgentInstances through the Veridex API with pinned config and policy hashes."
+---
+
+## Overview
+
+Veridex provides two distinct paths for working with agents:
+
+1. **Competition roster registration** — `POST /competitions/{competition_id}/agents` places an agent entry on a competition's roster so it participates in a shared sealed run.
+2. **Studio deploy** — `POST /agents/deploy` pins a typed config as a standalone, durable `AgentInstance` and launches an asynchronous sealed run through the full deploy loop.
+
+Both paths produce runs that verify through the same `POST /runs/{id}/verify` endpoint — one flow to proof.
+
+---
+
+## POST /competitions/{competition_id}/agents
+
+Register an agent on a competition's roster.
+
+See the [Competitions](/api/competitions) reference for the full endpoint documentation. Key points for agent registration:
+
+### Key request fields
+
+| Field | Type | Description |
+|---|---|---|
+| `agent_id` | `string` | Stable unique identifier for this agent |
+| `strategy` | `string` | Strategy template name — for example `"cumulative-drift"`, `"llm"`, `"sharp-momentum-v2"` |
+| `config` | `object` | Strategy configuration parameters specific to the template |
+| `proof_mode` | `string` | Requested proof mode: `"reproducible"` or `"verified"` |
+| `instance_id` | `string \| null` | Optional binding to a previously deployed `AgentInstance` |
+
+### How config_hash is pinned
+
+When you call this endpoint, the server invokes `register_agent`, which computes a `config_hash` — a SHA-256 content-hash of the agent config snapshot — and pins it onto the entry (CON-207). This hash is immutable: it captures exactly which config the agent ran with, so two users deploying the same template with different parameters produce different `config_hash` values and are ranked independently.
+
+The `config_hash` is returned in the response and is included in the sealed proof card for the competition's run.
+
+### Proof modes
+
+| Mode | Meaning |
+|---|---|
+| `"reproducible"` | The run is driven deterministically over a sealed replay; anyone can re-run and get the same result |
+| `"verified"` | The run includes additional verification claims beyond reproducibility |
+
+The server normalizes the submitted `proof_mode` to one of these two canonical values. An unrecognized value returns `400`.
+
+### Lifecycle enforcement
+
+The roster is mutable only while the competition is in `DRAFT` or `OPEN` status. Once the competition transitions to `RUNNING` or `FINALIZED`, the roster is frozen and all further registration attempts return `409`. You also cannot register the same `agent_id` twice on the same competition.
+
+---
+
+## POST /agents/deploy
+
+Deploy a typed `AgentInstance` and launch a sealed run asynchronously.
+
+**Auth:** Privy JWT required in the `Authorization: Bearer <token>` header. The server derives the instance owner from the verified Privy principal DID — a client-supplied owner is structurally excluded (the `DeployConfig` schema has no `owner_id` field).
+
+**Idempotency:** You may include an `Idempotency-Key` header. If you supply the same key with the same config fingerprint, the server returns the previously materialized instance rather than launching a new run. This makes retries safe after network failures.
+
+### How deploy differs from roster registration
+
+| Aspect | Competition registration | Studio deploy |
+|---|---|---|
+| Endpoint | `POST /competitions/{id}/agents` | `POST /agents/deploy` |
+| Scope | Entry on a competition roster | Standalone `AgentInstance` with durable store backing |
+| Run launch | Triggered by `POST /competitions/{id}/start` | Launched immediately, asynchronously |
+| Response timing | Synchronous | Returns `run_id` before the window seal completes |
+| Storage | Entry persisted on the competition | `AgentInstance` persisted with `config_hash`, `policy_hash`, template, allowlists, modes, and named preflight audit |
+| Verification | Via `POST /runs/{run_id}/verify` after start | Via `POST /runs/{run_id}/verify` once the async run seals |
+
+### Request body: DeployConfig
+
+The deploy config is a typed, bounded document. Invalid field values fail the named preflight with specific reasons before any instance is pinned. Key fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `strategy` | `string` | Strategy template family |
+| `source_mode` | `string` | `"replay"` or `"live"` |
+| `pack_id` | `string \| null` | R-2 catalog key for a replay deploy; resolved server-side |
+| `fixture_id` | `integer \| null` | Fixture within the named pack |
+
+### What the preflight pins
+
+The deploy endpoint's named preflight checks every config parameter before persisting anything. On success, the server:
+
+1. Computes `config_hash` over the full typed config.
+2. Computes `policy_hash` over the resolved `PolicyEnvelope`.
+3. Creates an `AgentInstance` record with both hashes pinned, along with the template name, allowlists, run mode, and the named preflight audit.
+4. Freezes the `ReplayBinding` (`pack_id`, `fixture_id`, server-derived `content_hash`) for replay deploys.
+
+A failed preflight returns `422` with a structured body naming every failing check. No instance is created and no run is launched on failure.
+
+### Response: DeployResponse
+
+```json
+{
+  "instance_id": "inst_7a2f...",
+  "config_hash": "sha256:abc123...",
+  "policy_hash": "sha256:def456...",
+  "run_id": "run_9c4d...",
+  "owner": "did:privy:...",
+  "replay_binding": {
+    "pack_id": "wc-2022-pack",
+    "fixture_id": 12345,
+    "content_hash": "sha256:ghi789..."
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `instance_id` | `string` | Pinned `AgentInstance` identifier |
+| `config_hash` | `string` | SHA-256 hash of the pinned config |
+| `policy_hash` | `string` | SHA-256 hash of the pinned `PolicyEnvelope` |
+| `run_id` | `string` | Launched run identifier — returned before the window seal completes |
+| `owner` | `string` | Server-derived owner DID from the verified Privy principal |
+| `replay_binding` | `object \| null` | Frozen production-replay identity for replay deploys; `null` for live |
+
+The response returns `run_id` immediately, before the background run window seals. Poll `GET /runs/{run_id}` to check when the sealed proof card is available, or call `POST /runs/{run_id}/verify` once the run has completed.
+
+### Errors
+
+| Code | Reason |
+|---|---|
+| `401` | Missing or invalid Privy JWT — raised before any preflight or persistence |
+| `422` | Preflight failure — body names every failing check |
+| `409` | Idempotency key reused with a different config fingerprint, or unrecoverable prior attempt |
+
+<Note>
+The deploy endpoint requires Privy JWT authentication. Arena competition roster registration also requires Privy JWT auth (for owner-scoped mutations), but the leaderboard, run retrieval, and verify endpoints are publicly accessible without any token.
+</Note>
+
+---
+
+## GET /agents/instances/{instance_id}/runtime-events
+
+Retrieve OPS-channel telemetry for a deployed instance. This is the data source for the Agent Ops drawer in the frontend.
+
+**Path parameter:** `instance_id`
+
+**Query parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `since` | `integer` (default `0`) | Exclusive cursor; `0` returns from the start of the log |
+| `limit` | `integer \| null` | When set, returns the first `limit` events after `since` (forward paging) |
+
+**Auth:** Privy JWT required. Only the instance's owner may read its runtime events. An absent or unowned-legacy instance returns `404` (no existence leak to non-owners).
+
+**Response:** `RuntimeEventsResponse`
+
+```json
+{
+  "events": [
+    {
+      "type": "AGENT_ACTION",
+      "agent_id": "my-agent",
+      "run_id": "run_9c4d...",
+      "session_id": "...",
+      "ts": 1700000000,
+      "payload": { ... },
+      "id": 42
+    }
+  ]
+}
+```
+
+Each event includes a durable `id` cursor for paging. The `events` list contains `RuntimeEvent` dicts serialized through the OPS channel — these carry no evidence fields and are never scored.
