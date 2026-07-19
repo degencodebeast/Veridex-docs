@@ -1,7 +1,7 @@
 ---
-title: "Head-to-Head Agent Duel in the Veridex Arena"
+title: "Head-to-Head Agent Duel: Compare Strategies in the Arena"
 sidebarTitle: "Head-to-Head"
-description: "Compare two agents side-by-side on the same sealed fixture to see exactly where their strategies diverge and what the law scored."
+description: "Compare two agents side-by-side on the same sealed fixture to see exactly where their strategies diverge, what the law scored, and why."
 ---
 
 The **Head-to-Head Duel** view lets you place two competing agents side by side on the same sealed TxLINE fixture and inspect exactly where their strategies diverge — what each proposed, what the law scored, and what the policy gate decided.
@@ -22,7 +22,7 @@ For each fixture in the competition, the Duel view renders a synchronized compar
 The Duel is a fair fight by construction:
 
 - **Same ticks.** Both agents receive the identical `MarketState` snapshot at every tick, derived from the same single TxLINE normalizer. No agent sees a fresher price or a later update.
-- **Same law.** CLV is recomputed by the same deterministic `law/recompute.py` code over the same sealed evidence for both agents. The law does not behave differently depending on which agent it is scoring.
+- **Same law.** CLV is recomputed by the same deterministic law code over the same sealed evidence for both agents. The law does not behave differently depending on which agent it is scoring.
 - **Same policy.** Both agents are evaluated by the same policy envelope, the same circuit breaker, the same stake caps. Policy cannot be more permissive for one agent than the other.
 
 When two agents diverge in the Duel view — one proposes and one abstains, one earns positive CLV and the other does not — the explanation is **strategy**, not a difference in inputs, scoring rules, or execution conditions.

@@ -1,5 +1,5 @@
 ---
-title: "Deploy Your Own Agent into the Veridex Pipeline"
+title: "Deploy Your Own Agent into the Veridex Proof Pipeline"
 sidebarTitle: "Deploy Agent"
 description: "Configure a TOML file, run the veridex-agent CLI or Docker container, and receive a sealed verifiable proof using the same pipeline as the Arena."
 ---
@@ -85,8 +85,8 @@ The trust boundary for a deployed agent is identical to the Arena:
 
 1. **The LLM or strategy proposes** — a constrained `AgentAction` with untrusted metadata.
 2. **The law recomputes** — edge and CLV are derived from sealed evidence in `veridex/law/recompute.py`, never from the agent's claimed values.
-3. **The proof binds the evidence hash** — the run manifest is a Merkle root-forest covering event log, scores, receipts, policy, and competition domains.
-4. **The run anchors on Solana** — if `anchor=true` and `SOLANA_KEYPAIR_PATH` is set in `veridex/.env`, the manifest hash is committed as a Solana Memo. If not configured, the anchor check reports `not_anchored` honestly.
+3. **The proof binds the evidence hash** — a run-record fingerprint (manifest hash) is derived from the sealed evidence.
+4. **The run-record fingerprint anchors on Solana** — if `anchor=true` and `SOLANA_KEYPAIR_PATH` is set in `veridex/.env`, the manifest hash is committed as a Solana Memo. Only this fingerprint goes on-chain; detailed evidence remains off-chain and verifiable through the API. If not configured, the anchor check reports `not_anchored` honestly.
 
 The trust path is import-audited to contain zero LLM SDK code. Any model rationale or claimed edge sits in an untrusted metadata block and never enters the evidence hash or the CLV score.
 

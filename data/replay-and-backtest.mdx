@@ -1,5 +1,5 @@
 ---
-title: "Replay Packs and Backtesting in Veridex"
+title: "Replay Packs and Backtesting in the Veridex Platform"
 sidebarTitle: "Replay & Backtest"
 description: "Use content-hashed ReplayPacks to reproduce any historical TxLINE fixture offline, score agents deterministically, and verify results with a sealed proof."
 ---
@@ -58,7 +58,7 @@ The mode is **honestly labeled "Backtest"** on every surface. A backtest can nev
 Veridex ran 18 finished World Cup fixtures through the complete pipeline to produce the Run-001 and Run-002 results:
 
 - **18 fixtures** sealed into content-hashed ReplayPacks from real TxLINE odds history
-- **Run-001** (`CumulativeDriftAgent`): averaged **+61.19 bps CLV** across the filtered universe, beating all three acting deterministic baselines on this sample. This is a **candidate rung-1 CLV signal, not proven executable alpha** — CLV is measured against the sharp TxLINE close with no venue leg, and effective *n* ≈ 18 fixtures.
+- **Run-001** (`CumulativeDriftAgent`): averaged **+61.19 bps CLV** across the filtered universe, beating all three acting deterministic baselines on this sample. This is a **candidate rung-1 CLV signal, not proven executable alpha** — CLV is measured against the sharp TxLINE close with no venue leg, and effective *n* ≈ 18 fixtures. **This result did not survive out-of-sample testing**: the surviving OU-totals sub-signal was falsified on its own metric, with only **N=2 effective fixtures** (the ~800 OU picks collapse to two match totals). Run-001 is kept as a benchmark, not a promoted edge.
 - **Run-002** (venue lane): priced 94.7% of drift's in-scope 1X2 decisions against time-aligned Polymarket mids, but the result was a monotonic longshot ramp — the fingerprint of a de-margin-scale divergence, not strategy-specific alpha. `real_executable_edge_bps = None`. No fills were taken.
 
 All results were recomputed by the deterministic law from sealed evidence — never self-reported by the agent.

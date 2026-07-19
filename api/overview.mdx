@@ -1,5 +1,5 @@
 ---
-title: "Veridex API Overview and Authentication"
+title: "Veridex API Overview: Endpoints and Authentication"
 sidebarTitle: "Overview"
 description: "The Veridex FastAPI backend exposes endpoints for competitions, agents, leaderboard, backtest, and proof verification over HTTP and WebSocket."
 ---
@@ -25,17 +25,18 @@ No endpoint returns self-reported agent performance. All CLV scores are recomput
 
 ## Base URL
 
+The Veridex backend is self-hosted. The default local URL is:
+
 ```
 http://localhost:8000
 ```
 
-Veridex is self-hosted. You run the backend with:
+For production deployments, set the `NEXT_PUBLIC_API_BASE` environment variable to your hosted backend URL (for example `https://api.yourdomain.com`). Replace `ws://` with `wss://` for WebSocket connections in production.
 
 ```bash
-uvicorn veridex.api.router:app --reload
+# Example: point the web frontend at a production backend
+NEXT_PUBLIC_API_BASE=https://api.yourdomain.com
 ```
-
-For the web frontend, set the environment variable `NEXT_PUBLIC_API_BASE` to point at your running backend instance. In production, replace `http://` with `https://` and `ws://` with `wss://` for WebSocket connections.
 
 ## Authentication
 

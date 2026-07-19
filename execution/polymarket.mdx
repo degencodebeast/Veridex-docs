@@ -1,5 +1,5 @@
 ---
-title: "Polymarket Execution: CLOB Integration and Safety"
+title: "Polymarket CLOB Execution: Quotes, Orders, and Safety"
 sidebarTitle: "Polymarket"
 description: "Veridex integrates with the Polymarket CLOB for read and write execution, with an event-to-market resolver, price-unit discipline, and fail-closed guards."
 ---
@@ -8,7 +8,7 @@ description: "Veridex integrates with the Polymarket CLOB for read and write exe
 
 Veridex integrates with the Polymarket Conditional Token CLOB for two purposes: **fetching live quotes** (read path) and **submitting orders** (write path). The read path is available in all non-paper modes; the write path is available only under `live_guarded` mode with all operator arming steps completed.
 
-Market resolution uses the public Gamma API. Order book access and order submission use a vendored, pinned, MIT-licensed Polymarket CLOB client kept in-repo under `veridex/venues/_vendor/polymarket_clob/` — the exact reviewed bytes ship with the repository rather than floating on a pip dependency.
+Market resolution uses the public Gamma API. Order book access and order submission use a vendored, pinned, MIT-licensed Polymarket CLOB client — the exact reviewed bytes ship with the repository rather than floating on a pip dependency.
 
 ## Read path vs write path
 

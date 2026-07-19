@@ -1,5 +1,5 @@
 ---
-title: "Run Retrieval and Proof Verification API"
+title: "Run Retrieval and Proof Verification API Reference"
 sidebarTitle: "Runs & Verify"
 description: "GET /runs/{id} returns a run's proof card. POST /runs/{id}/verify recomputes the proof from sealed evidence and returns per-check verdicts."
 ---
@@ -52,7 +52,7 @@ Re-run the deterministic law over the sealed event log and return the authoritat
 
 **What verify does:**
 
-The verifier (`veridex.verifier.recompute.verify_run`) recomputes the `evidence_hash` over the sealed `run_events` prefix, re-derives the score root, and rebuilds the run manifest so the `manifest_hash` is byte-identical to the anchored Solana Memo payload — receipt-independent and read-only over the seal. It then rebuilds all 7 proof checks fresh from the recomputed data.
+The verifier recomputes the `evidence_hash` over the sealed `run_events` prefix, re-derives the score root, and rebuilds the run manifest so the `manifest_hash` is byte-identical to the anchored Solana Memo payload — receipt-independent and read-only over the seal. It then rebuilds all 7 proof checks fresh from the recomputed data.
 
 **Response:** `VerifyResponse`
 

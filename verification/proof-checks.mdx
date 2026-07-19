@@ -1,5 +1,5 @@
 ---
-title: "The Seven Veridex Proof Checks Explained"
+title: "The Seven Structural Proof Checks in Veridex Explained"
 sidebarTitle: "Proof Checks"
 description: "Every Veridex run produces seven structural proof checks that recompute from sealed evidence — tamper one byte and the proof goes red."
 ---
@@ -45,7 +45,7 @@ To close a coordinated tamper: both the recompute inputs (market snapshots and a
 
 ### The LLM's claim and the law's score are two separate code paths
 
-The agent's `claimed_edge_bps` is recorded as untrusted metadata. The trust path — `law/`, `scoring.py`, `leaderboard.py`, `verifier/`, `checks/`, `ingest/`, `policy/` — is statically import-audited to contain zero LLM SDK code. The `llm_boundary` check re-runs this audit live. If a forbidden import (`agno`, `anthropic`, `openai`, `google.generativeai`, `litellm`) appears anywhere on the trust path, the check fails. If a trust directory is missing entirely, the audit fails closed rather than passing vacuously.
+The agent's `claimed_edge_bps` is recorded as untrusted metadata. The entire trust path — the law, scoring, leaderboard, verifier, checks, ingest, and policy modules — is statically import-audited to contain zero LLM SDK code. The `llm_boundary` check re-runs this audit live. If a forbidden import (`agno`, `anthropic`, `openai`, `google.generativeai`, `litellm`) appears anywhere on the trust path, the check fails. If a trust directory is missing entirely, the audit fails closed rather than passing vacuously.
 
 ## The Proof Card
 

@@ -1,10 +1,10 @@
 ---
-title: "Configure Veridex: Credentials and Environment"
+title: "Configure Veridex: Environment Variables and Agent TOML"
 sidebarTitle: "Configuration"
-description: "Set up TxLINE credentials, Solana keypair, Polymarket keys, and database connection for Veridex live and anchored runs."
+description: "Set up TxLINE credentials, Solana keypair, Polymarket keys, and database connection string for Veridex live, anchored, and production runs."
 ---
 
-Veridex separates strategy configuration from credentials by design. Your agent TOML holds strategy and policy knobs only — **credentials never go in the TOML** (COM-001). The TxLINE JWT, API token, Solana keypair path, and venue keys are read at runtime from `veridex/.env` via `veridex.config.Settings`.
+Veridex separates strategy configuration from credentials by design. Your agent TOML holds strategy and policy knobs only — **credentials never go in the TOML**. The TxLINE JWT, API token, Solana keypair path, and venue keys are read at runtime from `veridex/.env` via `veridex.config.Settings`.
 
 Copy `.env.example` to `veridex/.env` and fill in the values relevant to the features you want to enable. Everything in the default demo runs without credentials; values are validated only when the corresponding live operation is attempted.
 
@@ -123,9 +123,9 @@ NEXT_PUBLIC_API_BASE=https://your-api.example.com
 The agent TOML holds all non-secret strategy and policy configuration. Below is the full `veridex_agent/sample_agent.toml` as shipped:
 
 ```toml
-# Sample standalone-agent run config (WD-3). NON-SECRET ONLY.
+# Sample standalone-agent run config. NON-SECRET ONLY.
 # Credentials (TxLINE JWT/X-Api-Token, Solana keypair, venue keys) come from veridex/.env
-# via veridex.config.Settings — NEVER from this file (COM-001).
+# via veridex.config.Settings — NEVER from this file.
 
 agent_id = "momentum-desk-1"
 strategy = "momentum"          # baseline | momentum | llm

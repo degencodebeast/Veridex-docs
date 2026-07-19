@@ -1,16 +1,14 @@
 ---
-title: "Agent Studio: Configure and Deploy Trading Agents"
+title: "Agent Studio: Configure and Deploy Your Trading Agents"
 sidebarTitle: "Agent Studio"
 description: "Use Agent Studio to configure a strategy template, set policy guardrails, run a preflight check, and deploy a pinned AgentInstance in one flow."
 ---
 
-Agent Studio is the UI and API surface for Veridex's end-to-end agent lifecycle:
+Agent Studio is the UI and API surface for Veridex's end-to-end agent lifecycle. You choose a strategy template, set typed and bounded config parameters, run a preflight check that fails closed with named reasons, deploy a pinned `AgentInstance`, watch it trade in the Cockpit, and verify the sealed run — all in one flow:
 
 ```
 configure → preflight → deploy → observe → verify
 ```
-
-You choose a strategy template, set typed and bounded config parameters, run a preflight check that fails closed with named reasons, deploy a pinned `AgentInstance`, watch it trade in the Cockpit, and verify the sealed run — all in one flow.
 
 ---
 
@@ -28,7 +26,7 @@ AgentTemplate + AgentConfig + PolicyEnvelope = AgentInstance
 | **AgentConfig** | The concrete deployed strategy instance: market universe, signal thresholds, warmup/lookback windows, confirmation rules, quote freshness, stake sizing, risk caps, cooldowns, source mode, and execution mode. |
 | **PolicyEnvelope** | The execution boundary: stake caps, order caps, allowlists, kill switch, quote freshness, and approval requirements. |
 
-Veridex stores every `AgentInstance` durably (Postgres or in-memory), so two users can deploy the same template with different configs, rank them head-to-head on the same leaderboard, and Veridex will still prove exactly what each one did.
+Veridex stores every `AgentInstance` durably, so two users can deploy the same template with different configs, rank them head-to-head on the same leaderboard, and Veridex will still prove exactly what each one did.
 
 ---
 

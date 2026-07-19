@@ -1,7 +1,7 @@
 ---
-title: "veridex-agent SDK and CLI Reference"
+title: "veridex-agent SDK and CLI: Standalone Agent Reference"
 sidebarTitle: "SDK & CLI"
-description: "Use the veridex-agent CLI to run standalone sealed agents with any strategy template, config file, and execution mode."
+description: "Use the veridex-agent CLI to configure, run, and verify standalone sealed trading agents outside the Arena, with the same law and proof pipeline."
 ---
 
 The `veridex-agent` SDK is the standalone runner seam used by both the Agent Studio deploy endpoint and the CLI. Running an agent with the CLI or calling the deploy endpoint routes through the exact same single runner — there is no separate implementation. Every run produces a sealed, independently verifiable proof using the same law / policy / proof pipeline as the Arena.
@@ -33,7 +33,7 @@ After a successful run, the CLI prints a single `[VERIFIED]` line:
 | `run_id` | The unique identifier for this sealed run. Use it with `POST /runs/{run_id}/verify`. |
 | `source` | The data source mode: `replay` or `live`. |
 | `avg_clv_bps` | Average closing-line value in basis points, recomputed by the deterministic law from sealed evidence. Never self-reported by the agent. |
-| `manifest_hash` | The Merkle root-forest hash bound to this run. This is what gets anchored on Solana when `anchor=true`. |
+| `manifest_hash` | The run-record fingerprint for this sealed run. This is what gets anchored on Solana when `anchor=true`; detailed evidence remains off-chain and verifiable through the API. |
 | `anchor` | `not_anchored` (default) or the Solana transaction signature when anchoring is configured. |
 
 ---
@@ -79,7 +79,7 @@ anchor = false                 # true → real Solana Memo anchor (requires SOLA
 | `min_edge_bps` | Minimum recomputed executable edge (bps) required for the policy gate to allow execution. |
 | `market_allowlist` | List of market key prefixes the agent is permitted to act on. Actions targeting markets outside this list are blocked by the policy gate. |
 | `venue_allowlist` | List of venue identifiers the agent is permitted to route to. |
-| `execution_mode` | One of `paper` (no execution lane), `dry_run` (full policy/execution lifecycle with a simulated receipt), or `live_guarded` (real venue submission under policy, auth, and caps). |
+| `execution_mode` | One of `paper` (no execution lane), `dry_run` (full policy/execution lifecycle with a simulated receipt), or `live_guarded` (real venue submission under policy, auth, and caps — requires additional operator-only arming steps; an agent cannot enable live execution on its own). |
 | `anchor` | When `false` (the default), the run reports `anchor=not_anchored`. Set to `true` to anchor the manifest hash as a Solana Memo; requires `SOLANA_KEYPAIR_PATH` in `veridex/.env`. |
 
 ---

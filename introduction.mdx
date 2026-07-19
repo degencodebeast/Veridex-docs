@@ -1,7 +1,7 @@
 ---
-title: "Veridex: Build, Deploy, and Verify Trading Agents"
+title: "Veridex: Build, Deploy, and Verify Autonomous Trading Agents"
 sidebarTitle: "Introduction"
-description: "Learn what Veridex is, the four platform pillars, and the six-link proof chain that makes every result independently verifiable."
+description: "Learn what Veridex is, the four platform pillars, and the six-link proof chain that makes every agent result independently verifiable."
 ---
 
 ## What Veridex is
@@ -37,7 +37,7 @@ AGENT proposes → LAW recomputes → POLICY gates → VENUE executes → PROOF 
 
 | Pillar | What it is | Why it exists |
 |---|---|---|
-| **Agent Studio** | Configure and deploy trading agents from strategy templates — typed, bounded configs; a preflight that fails closed with named reasons; one flow to a running, pinned agent. | Users need to build strategies, not watch hardcoded bots. |
+| **Agent Studio** | Configure and deploy trading agents from strategy templates — typed, bounded configs; a preflight that fails closed with named reasons; one click to a running, pinned agent. | Users need to build strategies, not watch hardcoded bots. |
 | **Live Agent Arena** | A real-time room where agents compete head-to-head on identical sealed inputs — ingesting TxLINE data, producing actions, ranking on CLV, streaming their full decision trail (proposal → law → policy → receipt), with Head-to-Head Duel and a falsifiable leaderboard. | A single strategy result is easy to overread. Running agents head-to-head on one sealed tape shows which ideas survive the same evidence, which abstain, and which fail — a fair, replayable contest. |
 | **Verification / Proof layer** | Deterministic recomputation, seven structural checks, evidence hashes, Merkle root-forest, Solana anchors, proof cards, and verify-yourself endpoints. | Agents can trade, but they can't grade themselves — so every result is recomputed from sealed evidence and independently checkable. |
 | **Execution + Risk layer** | Policy envelopes, two-phase gating, quote freshness, slippage and stake caps, a circuit breaker, honest mode labels, and a fail-closed operator-only path to real money. | Production trading isn't just finding edge — it's deciding when acting is safe. |
@@ -56,5 +56,7 @@ Veridex enforces a set of structural guarantees that make each result independen
 <Warning>
   **No self-grading, no proven alpha, no real-money orders placed yet.**
 
-  The agent's claimed edge is recorded as untrusted metadata — it is fenced in the UI as `NOT AN INPUT TO SCORE` and has no data path to the scored CLV. Run-001 produced a candidate rung-1 CLV signal (+61.19 bps average across 18 World Cup fixtures); this is directional evidence, not a statistical proof of executable alpha. Run-002 did not demonstrate executable venue edge — `real_executable_edge_bps = None`. The `live_guarded` execution surface is built and fail-closed, but no real order has been placed; the first 1-share smoke is a deliberate human operator decision.
+  The agent's claimed edge is recorded as untrusted metadata — it is fenced in the UI as `NOT AN INPUT TO SCORE` and has no data path to the scored CLV. Run-001 produced a candidate rung-1 CLV signal (+61.19 bps average across 18 World Cup fixtures); this result **did not survive out-of-sample testing** — the surviving OU-totals sub-signal falsified on its own metric and returned NULL on independent settled outcomes at only N=2 effective fixtures. It is directional evidence, not a statistical proof of executable alpha. Run-002 did not demonstrate executable venue edge — `real_executable_edge_bps = None`. The `live_guarded` execution surface is built and fail-closed, but no real order has been placed; the first 1-share smoke is a deliberate human operator decision.
+
+  When a run is anchored, only the run-record fingerprint (the `manifest_hash`) is stored on Solana as a Memo transaction. The full sealed evidence — odds ticks, policy verdicts, receipts, and score rows — remains off-chain and is independently re-provable via `POST /runs/{id}/verify`.
 </Warning>

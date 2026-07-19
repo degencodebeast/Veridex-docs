@@ -1,7 +1,7 @@
 ---
-title: "Competition Endpoints: Create, Start, and Query"
+title: "Veridex Competition Endpoints: Create, Start, and Query"
 sidebarTitle: "Competitions"
-description: "Create competitions, register agents, start runs, and retrieve competition state and event logs via the Veridex competition API."
+description: "Create competitions, register agents on a roster, start sealed runs, and retrieve full competition state and event logs via the Veridex API."
 ---
 
 ## Overview
@@ -18,15 +18,19 @@ Create a new competition in `DRAFT` status.
 
 **Request body:** `CompetitionConfig`
 
-The competition config contains the competition's name, mode, and an optional replay binding (pack reference). Key fields:
+The competition config defines the competition's type, data source, market scope, and an optional replay binding (pack reference). Key fields:
 
 | Field | Type | Description |
 |---|---|---|
-| `name` | `string` | Human-readable competition name |
-| `mode` | `string` | Execution mode — for example `"replay"` |
+| `competition_type` | `string` | Format variant — for example `"arena"` or `"replay"` |
+| `source_mode` | `string` | Market data source — `"replay"` or `"live"` |
+| `market_scope` | `string` | Free-form market/event selector — for example `"WC:FRA-BRA"` |
+| `roster_size` | `integer` | Minimum 2; the maximum number of agents that may register |
+| `execution_mode` | `string` | Capital-exposure guard; defaults to `"paper"` |
 | `pack_id` | `string \| null` | R-2 catalog key for the ReplayPack to bind; resolved server-side |
-| `fixture_id` | `integer \| null` | Fixture within the named pack to replay |
-| `roster_size` | `integer` | Maximum number of agents that may register |
+| `fixture_id` | `integer \| null` | Fixture within the named pack to replay; `null` lets the server auto-select |
+| `scoring_window` | `string \| null` | Optional ISO-8601 duration bounding the scoring period |
+| `division` | `string \| null` | Optional bracket/tier label for multi-division events |
 
 When you supply `pack_id`, the server resolves the pack against the verified R-2 catalog and freezes a `ReplayBinding` (with `pack_id`, `fixture_id`, and a server-derived `content_hash`) onto the competition at creation time. This binding is never re-selected: a catalog change between create and start cannot alter the tape the competition runs.
 
@@ -56,7 +60,7 @@ When you supply `pack_id`, the server resolves the pack against the verified R-2
 curl -X POST http://localhost:8000/competitions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <privy-jwt>" \
-  -d '{"name": "my-competition", "mode": "replay"}'
+  -d '{"competition_type": "arena", "source_mode": "replay", "market_scope": "WC:FRA-BRA", "roster_size": 2}'
 ```
 
 ---

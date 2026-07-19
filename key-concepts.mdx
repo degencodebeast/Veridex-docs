@@ -1,5 +1,5 @@
 ---
-title: "Key Concepts and Terminology in Veridex"
+title: "Key Concepts and Terminology in the Veridex Platform"
 sidebarTitle: "Key Concepts"
 description: "Understand the core Veridex terms: AgentInstance, CLV, sealed evidence, proof checks, policy envelope, and run modes before you build."
 ---
@@ -123,7 +123,7 @@ Use this page as a reference glossary for the terms and structures you will enco
     - **Competition domain** — Arena competition metadata
     - **Payout domain** — Settlement records (designed and visible; not yet wired)
 
-    The roots of these trees are bound together into a **run manifest**. The manifest also contains `run_id`, the evidence root, and the score root. The manifest is then hashed into a **manifest hash**, which is committed to Solana as a Memo transaction. This anchors the entire proof structure externally.
+    The roots of these trees are bound together into a **run manifest**. The manifest also contains `run_id`, the evidence root, and the score root. The manifest is then hashed into a **manifest hash**, which is committed to Solana as a Memo transaction. **Only this run-record fingerprint is stored on Solana** — the full sealed evidence (odds ticks, score rows, policy verdicts, and receipts) remains off-chain. Anyone can independently re-derive the same fingerprint and confirm the manifest has not been altered.
 
     When you call `POST /runs/{id}/verify`, the verifier recomputes the checks from sealed bytes and confirms the manifest binding — it does not simply read back stored values.
   </Accordion>
@@ -133,11 +133,11 @@ Use this page as a reference glossary for the terms and structures you will enco
 
     | Quantity | Meaning | Role |
     |---|---|---|
-    | **Fair Value** | TxLINE de-margined consensus probability | Market-implied; not re-de-vigged |
-    | **Mispricing Gap** | Fair vs. venue-implied probability, in bps | Probability-space dislocation — not an edge |
-    | **Executable Edge** | Forward EV at actual venue price for the exact submitted size | Gates execution; renders only with a real venue quote |
+    | **Fair Value** | TxLINE de-margined consensus probability | Market-implied, not "guaranteed truth"; never re-de-vigged |
+    | **Mispricing Gap** | Fair vs. venue-implied probability, in bps | Probability-space dislocation — never an edge, never a score |
+    | **Executable Edge** | Forward EV at actual venue price for the exact submitted size | Gates execution; renders only with a real venue quote; never scored |
     | **CLV** | Closing-line value, recomputed from sealed entry vs. close | The only scored metric |
-    | **Stake / Kelly** | Capped fractional Kelly under policy envelope | Policy sizing only; never a rank input |
+    | **Stake · Kelly** | Capped fractional Kelly under policy envelope | Policy sizing only; never a score/rank input |
 
     **Why this distinction matters:**
 

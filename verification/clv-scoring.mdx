@@ -1,5 +1,5 @@
 ---
-title: "Closing-Line Value Scoring in Veridex"
+title: "Closing-Line Value Scoring, Results, and Limitations"
 sidebarTitle: "CLV Scoring"
 description: "Veridex scores agents on closing-line value recomputed from sealed evidence — not self-reported P&L, not Kelly sizing, not abstentions."
 ---
@@ -22,7 +22,7 @@ Veridex ranks the leaderboard on recomputed `avg_clv_bps` only. Confidence claim
 
 ## How CLV is computed
 
-CLV is computed **deterministically** by `veridex/law/recompute.py` — the trust core — from the sealed event log. It never reads the agent's `claimed_edge_bps`:
+CLV is computed **deterministically** by the trust core from the sealed event log. It never reads the agent's `claimed_edge_bps`:
 
 ```
 recompute(entry_state, action, *, closing, source_mode)
@@ -79,7 +79,7 @@ The `CumulativeDriftAgent` averaged **+61.19 bps CLV** across the 18-fixture fil
 | Threshold-move | −126.5 bps |
 | Seeded-random | −341.67 bps |
 
-The agent was net-positive on 10 of 18 fixtures.
+The agent was net-positive on 10 of 18 fixtures. This is a **candidate rung-1 CLV signal, not proven executable alpha** — CLV is measured against the sharp TxLINE close with no venue leg, and the effective sample is ~18 fixtures.
 
 **However:** this result did not survive out-of-sample testing. The surviving OU-totals sub-signal was taken out-of-sample (OOS) and falsified on its own metric — the sign flipped hard negative (in-sample +162 → OOS −254 bps, fixture-clustered) and was **NULL on independent settled outcomes** at only **N=2 effective fixtures** (the ~800 OU picks collapse to two match totals). Run-001 is kept as a benchmark, not a promoted edge. What makes it credible is its provenance: every CLV number was recomputed by the law from sealed evidence, never self-reported.
 

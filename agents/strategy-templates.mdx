@@ -1,16 +1,14 @@
 ---
-title: "Veridex Strategy Templates for Trading Agents"
+title: "Veridex Strategy Templates: Rules-Based, LLM, and More"
 sidebarTitle: "Strategy Templates"
 description: "Choose from rules-based, LLM-guided, and market-making strategy templates, each configurable with typed parameters and a deterministic config hash."
 ---
 
-A Veridex deploy is a pinned strategy instance built from a template and a config:
+A Veridex deploy is a pinned strategy instance built from a template and a config. The **AgentTemplate** is the strategy family — the signal logic, decision algorithm, and market regime it targets. The **AgentConfig** is the concrete deployed instance: the specific thresholds, lookback windows, market universe, sizing rules, and execution mode you set. Two users can deploy the same template with different configs and get different CLV, PnL, hit rate, and drawdown — that is the point of Agent Studio.
 
 ```
 AgentTemplate + AgentConfig + PolicyEnvelope = AgentInstance
 ```
-
-The **AgentTemplate** is the strategy family — the signal logic, decision algorithm, and market regime it targets. The **AgentConfig** is the concrete deployed instance: the specific thresholds, lookback windows, market universe, sizing rules, and execution mode you set. Two users can deploy the same template with different configs and get different CLV, PnL, hit rate, and drawdown — that is the point of Agent Studio.
 
 ---
 
@@ -58,7 +56,7 @@ The following strategy templates are available in Veridex. Each is a separate, d
     **Configurable parameters:** `cum_drift_logit_min`, `ewma_slope_alpha`, `trend_strength_min`, `min_tick_count`, `min_horizon_s`, `close_quality_required`, `cooldown_ticks`.
 
     <Note>
-    The `CumulativeDriftAgent` produced the strongest result in the Veridex World Cup backtest (Run-001: +61.19 bps avg CLV across 18 fixtures, beating all three deterministic baselines). This is a candidate signal, not proven executable alpha — see the README for the honest run-notes.
+    The `CumulativeDriftAgent` produced the strongest result in the Veridex World Cup backtest (Run-001: +61.19 bps avg CLV across 18 fixtures, beating all three deterministic baselines on that sealed sample). **This result did not survive out-of-sample testing.** The surviving sub-signal falsified on its own metric and came out NULL on independent settled outcomes at only N=2 effective fixtures. The Run-001 figure is directional evidence that the agent beat its baselines on identical sealed inputs; it is not a statistical proof of edge and should not be read as proven profitability or validated alpha.
     </Note>
   </Tab>
   <Tab title="value">
@@ -94,7 +92,7 @@ The following strategy templates are available in Veridex. Each is a separate, d
   </Tab>
   <Tab title="baseline">
     **Template key:** `baseline`  
-    **File:** `veridex/strategies/`  
+    **File:** `veridex/backtest/baseline_agents.py`  
     **Proof mode:** `reproducible`
 
     Deterministic baseline agents used for benchmarking. The three baselines included in the World Cup backtest (Run-001) were: favorite-follower (+4.6 bps avg CLV), threshold-move (−126.5 bps), and seeded-random (−341.7 bps). Baselines run through the same law, policy, and proof pipeline as any other template — their results are just as verifiable and just as falsifiable.
